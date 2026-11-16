@@ -9,10 +9,16 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <!-- Soft colour field behind everything, so the glass has something to refract -->
+  <div class="ambient" aria-hidden="true"></div>
+  <!-- When this scrolls out of view the header condenses -->
+  <div id="top-sentinel" aria-hidden="true"></div>
+
   <main class="main">
 
-    <!-- Wordmark input + global preview controls -->
-    <section class="workspace" aria-label="Wordmark preview controls">
+    <!-- Wordmark input + global preview controls (sticky glass header) -->
+    <header class="app-header">
+    <section class="workspace glass" aria-label="Wordmark preview controls">
       <div class="name-row">
         <div class="name-field">
           <label class="label" for="word">TYPE COMPANY NAME</label>
@@ -45,11 +51,14 @@
         </div>
       </div>
     </section>
+    </header>
 
-    <!-- Font source tabs, connect/import, search -->
+    <!-- Font library: source tabs, connect/import, search, category filters -->
+    <section class="library glass" aria-label="Font library">
     <div class="library-bar">
       <nav class="sources" aria-label="Font source">
         <div class="source-tabs">
+          <span class="tab-indicator" aria-hidden="true"></span>
           <button data-source="google">Google Fonts</button>
           <button data-source="local" class="active">Local Fonts</button>
         </div>
@@ -73,6 +82,7 @@
     <div class="toolbar">
       <div id="filters" class="filters" aria-label="Font category"></div>
     </div>
+    </section>
 
     <!-- Result count + sorting -->
     <div class="meta">

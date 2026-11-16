@@ -1,6 +1,6 @@
 /* =========================================================================
    Find My Type — styles
-   Phase 2: design system. Every colour, size, radius, shadow and timing
+   Phase 2: design system. Phase 3: Liquid Glass shell. Every colour, size, radius, shadow and timing
    comes from the tokens below; components never hard-code values.
    ========================================================================= */
 
@@ -75,6 +75,24 @@
   --control-h: 36px;
   --control-h-sm: 28px;
   --icon: 16px;
+
+  /* Glass material (Liquid Glass–style translucent panels) */
+  --glass-bg:        rgb(252 251 249 / .56);
+  --glass-bg-strong: rgb(252 251 249 / .8);
+  --glass-blur:      28px;
+  --glass-saturate:  180%;
+  --glass-border:    rgb(255 255 255 / .6);
+  --glass-edge:      rgb(27 26 24 / .08);  /* hairline outside the panel */
+  --glass-highlight: rgb(255 255 255 / .95); /* top inner light */
+  --glass-rim:       rgb(255 255 255 / .9);  /* specular rim */
+  --glass-well:      rgb(27 26 24 / .05);  /* recessed areas inside glass */
+  --glass-divider:   rgb(27 26 24 / .07);
+  --glass-shadow:    0 1px 1px rgb(27 26 24 / .03), 0 10px 36px rgb(27 26 24 / .08);
+
+  /* Ambient colour field */
+  --ambient-1: rgb(255 140 100 / .5);
+  --ambient-2: rgb(255 205 130 / .55);
+  --ambient-3: rgb(150 165 255 / .35);
 }
 
 body.dark {
@@ -102,6 +120,20 @@ body.dark {
   --shadow-sm: 0 1px 2px rgb(0 0 0 / .4);
   --shadow-md: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .35);
   --shadow-lg: 0 2px 6px rgb(0 0 0 / .35), 0 18px 48px rgb(0 0 0 / .5);
+
+  --glass-bg:        rgb(34 32 30 / .52);
+  --glass-bg-strong: rgb(34 32 30 / .82);
+  --glass-border:    rgb(255 255 255 / .08);
+  --glass-edge:      rgb(0 0 0 / .5);
+  --glass-highlight: rgb(255 255 255 / .1);
+  --glass-rim:       rgb(255 255 255 / .22);
+  --glass-well:      rgb(255 255 255 / .05);
+  --glass-divider:   rgb(255 255 255 / .07);
+  --glass-shadow:    0 1px 1px rgb(0 0 0 / .3), 0 14px 44px rgb(0 0 0 / .45);
+
+  --ambient-1: rgb(255 106 77 / .26);
+  --ambient-2: rgb(255 170 90 / .14);
+  --ambient-3: rgb(110 120 255 / .2);
 }
 
 /* ---------- 2. Base ---------- */
@@ -160,20 +192,72 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
   padding: var(--space-8) var(--space-8) var(--space-6);
 }
 
-/* ---------- 3. Workspace (name + controls) ---------- */
-.workspace {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
-  margin-bottom: var(--space-6);
+/* ---------- 2b. Liquid Glass ---------- */
+
+/* Soft colour field behind the page; gives the glass something to refract. */
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(42% 46% at 12% 10%, var(--ambient-1), transparent 72%),
+    radial-gradient(38% 42% at 88% 14%, var(--ambient-2), transparent 72%),
+    radial-gradient(50% 50% at 70% 92%, var(--ambient-3), transparent 72%);
+  filter: blur(24px);
+  transition: opacity var(--dur-slow) var(--ease-out);
 }
+
+#top-sentinel { position: absolute; top: 0; left: 0; width: 1px; height: 72px; pointer-events: none; }
+
+/* The material: translucent fill + blur + saturation, a bright top edge,
+   a soft drop shadow, and a specular rim that catches light on the corners. */
+.glass {
+  position: relative;
+  background: var(--glass-bg);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  border: 1px solid var(--glass-border);
+  box-shadow:
+    0 0 0 .5px var(--glass-edge),
+    inset 0 1px 0 var(--glass-highlight),
+    var(--glass-shadow);
+  transition: background-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
+}
+.glass::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--glass-rim), transparent 32%, transparent 68%, var(--glass-rim));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+  opacity: .7;
+  pointer-events: none;
+}
+
+/* ---------- 3. Workspace (name + controls) ---------- */
+
+/* Sticky header: stays in reach while you scroll the fonts, and condenses. */
+.app-header {
+  position: sticky;
+  top: var(--space-3);
+  z-index: 50;
+  margin-bottom: var(--space-4);
+}
+
+.workspace { border-radius: var(--radius-xl); }
+
+.app-header.condensed .workspace { background: var(--glass-bg-strong); }
 
 .name-row {
   display: flex;
   align-items: center;
   gap: var(--space-8);
   padding: var(--space-6) var(--space-6) var(--space-5);
+  transition: padding var(--dur-slow) var(--ease-out);
 }
 .name-field { flex: 1; min-width: 0; }
 
@@ -187,6 +271,12 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
   transition: color var(--dur-fast) var(--ease-out);
 }
 .name-field:focus-within .label { color: var(--accent-text); }
+.name-field .label {
+  max-height: 20px;
+  overflow: hidden;
+  transition: color var(--dur-fast) var(--ease-out), max-height var(--dur-slow) var(--ease-out),
+              margin var(--dur-slow) var(--ease-out), opacity var(--dur) var(--ease-out);
+}
 
 .word-input {
   display: block;
@@ -200,6 +290,7 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
   letter-spacing: -.035em;
   line-height: 1.2;
   caret-color: var(--accent);
+  transition: font-size var(--dur-slow) var(--ease-out);
 }
 .word-input::placeholder { color: var(--text-3); }
 .word-input:focus-visible { outline: none; }
@@ -220,8 +311,10 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
   width: var(--control-h);
   height: var(--control-h);
   padding: 0;
-  background: var(--surface-raised);
+  background: var(--glass-well);
+  border-color: transparent;
 }
+#theme:hover { background: var(--press); }
 /* Show a moon in light mode, a sun in dark mode */
 #theme .icon-sun { display: none; }
 body.dark #theme .icon-sun { display: block; }
@@ -232,8 +325,15 @@ body.dark #theme .icon-moon { display: none; }
   align-items: center;
   gap: var(--space-6);
   padding: var(--space-3) var(--space-6);
-  border-top: 1px solid var(--border);
+  border-top: 1px solid var(--glass-divider);
+  transition: padding var(--dur-slow) var(--ease-out);
 }
+
+/* Condensed header (after scrolling) */
+.app-header.condensed .name-row { padding: var(--space-3) var(--space-5) var(--space-2); }
+.app-header.condensed .name-field .label { max-height: 0; margin-bottom: 0; opacity: 0; }
+.app-header.condensed .word-input { font-size: 22px; }
+.app-header.condensed .style-controls { padding-block: var(--space-2); }
 
 .size-group { display: flex; align-items: center; gap: var(--space-4); }
 
@@ -251,7 +351,7 @@ body.dark #theme .icon-moon { display: none; }
   min-width: 28px;
   padding: 2px var(--space-1);
   margin-left: var(--space-2);
-  background: var(--surface-sunken);
+  background: var(--glass-well);
   border-radius: var(--radius-xs);
   color: var(--text);
   text-align: center;
@@ -265,7 +365,7 @@ body.dark #theme .icon-moon { display: none; }
   align-items: center;
   gap: var(--space-4);
   padding-left: var(--space-6);
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--glass-divider);
 }
 .palette-row { display: flex; align-items: center; gap: var(--space-4); }
 .color-wrap { display: inline-flex; align-items: center; gap: var(--space-2); }
@@ -291,25 +391,34 @@ body.dark #theme .icon-moon { display: none; }
   box-shadow: inset 0 0 0 1px rgb(128 128 128 / .35);
 }
 
-/* ---------- 4. Library bar (sources + search) ---------- */
+/* ---------- 4. Library panel (sources + search + filters) ---------- */
+.library {
+  border-radius: var(--radius-xl);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
 .library-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: var(--space-5);
-  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-3);
 }
 .sources { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
 
-/* Segmented control */
+/* Segmented control with a sliding glass "lens" behind the active tab */
 .source-tabs {
+  position: relative;
   display: flex;
   padding: 3px;
   margin-right: var(--space-3);
-  background: var(--surface-sunken);
+  background: var(--glass-well);
   border-radius: var(--radius-md);
 }
 .source-tabs button {
+  position: relative;
+  z-index: 1;
   min-height: 30px;
   padding: 0 var(--space-4);
   border: 0;
@@ -317,10 +426,21 @@ body.dark #theme .icon-moon { display: none; }
   color: var(--text-2);
 }
 .source-tabs button:hover { background: transparent; color: var(--text); }
-.source-tabs button.active {
+.source-tabs button:active:not(:disabled) { background: transparent; }
+.source-tabs button.active { color: var(--text); }
+
+.tab-indicator {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 0;
+  border-radius: calc(var(--radius-md) - 3px);
   background: var(--surface-raised);
-  color: var(--text);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--glass-highlight);
+}
+.tab-indicator.ready {
+  transition: transform var(--dur-slow) var(--ease-spring), width var(--dur-slow) var(--ease-spring);
 }
 
 #connect, #import {
@@ -337,25 +457,26 @@ body.dark #theme .icon-moon { display: none; }
   width: 100%;
   height: var(--control-h);
   padding: 0 var(--space-3) 0 36px;
-  background: var(--surface);
+  background: var(--glass-well);
   color: var(--text);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;
   border-radius: var(--radius-md);
-  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out),
+              background-color var(--dur-fast) var(--ease-out);
 }
 .search::placeholder { color: var(--text-3); }
-.search:hover { border-color: var(--border-strong); }
+.search:hover { background: var(--press); }
 .search:focus-visible {
   outline: none;
+  background: var(--surface-raised);
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 /* ---------- 5. Filters, count, sorting ---------- */
 .toolbar {
-  border-bottom: 1px solid var(--border);
-  padding-bottom: var(--space-4);
-  margin-bottom: var(--space-3);
+  border-top: 1px solid var(--glass-divider);
+  padding-top: var(--space-3);
 }
 .filters { display: flex; gap: var(--space-1); flex-wrap: wrap; }
 .filters button {
@@ -380,6 +501,7 @@ body.dark #theme .icon-moon { display: none; }
   justify-content: space-between;
   gap: var(--space-4);
   margin-bottom: var(--space-3);
+  padding: 0 var(--space-2);
   min-height: var(--control-h);
   font-size: var(--text-sm);
   color: var(--text-3);
@@ -557,11 +679,12 @@ body.dark #theme .icon-moon { display: none; }
   position: fixed;
   z-index: 1000;
   padding: var(--space-4);
-  background: var(--surface-raised);
+  background: var(--glass-bg-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
   color: var(--text);
-  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 0 0 .5px var(--glass-edge), inset 0 1px 0 var(--glass-highlight), var(--shadow-lg);
   animation: pop-in var(--dur) var(--ease-out);
 }
 .colour-popover[hidden] { display: none; }
@@ -598,8 +721,8 @@ body.dark #theme .icon-moon { display: none; }
   width: 140px;
   height: var(--control-h-sm);
   padding: 0 var(--space-2);
-  background: var(--surface-sunken);
-  border: 1px solid var(--border);
+  background: var(--glass-well);
+  border: 1px solid var(--glass-divider);
   border-radius: var(--radius-sm);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: var(--text-sm);
@@ -647,6 +770,8 @@ body.dark #theme .icon-moon { display: none; }
   .meta-actions { width: 100%; justify-content: space-between; }
   .grid { grid-template-columns: 1fr; }
   .sample { height: 230px; }
+  .app-header { top: var(--space-2); }
+  .app-header.condensed .style-controls { display: none; }
   .card-foot { opacity: .65; }
   .options { opacity: 1; }
   .options select { max-width: 128px; }
@@ -664,4 +789,20 @@ body.dark #theme .icon-moon { display: none; }
     animation: none !important;
     transition: none !important;
   }
+}
+
+/* ---------- 9. Reduced transparency / no backdrop-filter ----------
+   Glass becomes solid surfaces. Triggered by the OS setting (browser media
+   query, or the Mac app sets body.reduce-transparency), or missing support. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass, .colour-popover { background: var(--surface-raised); -webkit-backdrop-filter: none; backdrop-filter: none; }
+  .glass::before, .ambient { display: none; }
+}
+body.reduce-transparency .glass,
+body.reduce-transparency .colour-popover { background: var(--surface-raised); -webkit-backdrop-filter: none; backdrop-filter: none; }
+body.reduce-transparency .glass::before,
+body.reduce-transparency .ambient { display: none; }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass, .colour-popover { background: var(--surface-raised); }
 }

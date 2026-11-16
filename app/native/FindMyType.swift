@@ -123,7 +123,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var pendingExports: [(Data, String)] = []
     private var saving = false
 
-    private static let bridgeScript = """
+    private var reduceTransparency: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceTransparency }
+
+    private var bridgeScript: String { "window.__reduceTransparency = \(reduceTransparency);\n" + Self.bridgeFunctions }
+
+    private static let bridgeFunctions = """
     window.nativeFontCatalog = () => new Promise((resolve, reject) => {
       window.fontCatalogResolve = resolve;
       window.fontCatalogReject = reject;
@@ -140,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         config.setURLSchemeHandler(content, forURLScheme: "typefolio")
         config.userContentController.add(self, name: "saveExport")
         config.userContentController.add(self, name: "loadFonts")
-        config.userContentController.addUserScript(WKUserScript(source: Self.bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        config.userContentController.addUserScript(WKUserScript(source: bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
@@ -154,6 +158,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         window.makeKeyAndOrderFront(nil)
 
         web.load(URLRequest(url: URL(string: "typefolio://app/")!))
+
+        // Follow System Settings › Accessibility › Display › Reduce transparency live.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.web.evaluateJavaScript("window.setReduceTransparency?.(\(self.reduceTransparency))", completionHandler: nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 

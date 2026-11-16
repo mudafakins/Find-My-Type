@@ -290,8 +290,32 @@ function toggleNewest() {
 function setSource(source) {
   state.source = source;
   document.querySelectorAll('[data-source]').forEach((b) => b.classList.toggle('active', b.dataset.source === source));
+  moveTabIndicator();
   render();
 }
+
+/* =========================================================================
+   Glass shell: sliding tab indicator, condensing header, reduce transparency
+   ========================================================================= */
+
+const tabIndicator = $('.tab-indicator');
+
+/** Slide the glass lens under the active source tab. */
+function moveTabIndicator() {
+  const active = $('.source-tabs button.active');
+  if (!active || !tabIndicator) return;
+  tabIndicator.style.width = active.offsetWidth + 'px';
+  tabIndicator.style.transform = `translateX(${active.offsetLeft}px)`;
+}
+
+// Condense the sticky header once the page scrolls past the top.
+new IntersectionObserver(([entry]) => {
+  $('.app-header').classList.toggle('condensed', !entry.isIntersecting);
+}).observe($('#top-sentinel'));
+
+/** The Mac app calls this with the system "Reduce transparency" setting. */
+window.setReduceTransparency = (on) => document.body.classList.toggle('reduce-transparency', !!on);
+if (window.__reduceTransparency) window.setReduceTransparency(true);
 
 /* =========================================================================
    Grid rendering
@@ -905,7 +929,7 @@ el.clearFavourites.addEventListener('click', () => {
   message('Favourites cleared.');
 });
 
-window.addEventListener('resize', refreshAllCards);
+window.addEventListener('resize', () => { refreshAllCards(); moveTabIndicator(); });
 document.fonts.addEventListener('loadingdone', refreshAllCards);
 
 /* =========================================================================
@@ -913,6 +937,10 @@ document.fonts.addEventListener('loadingdone', refreshAllCards);
    ========================================================================= */
 
 renderToolbar();
+moveTabIndicator();
+// Enable the slide animation only after the first placement (no slide-in on load).
+requestAnimationFrame(() => requestAnimationFrame(() => tabIndicator?.classList.add('ready')));
+document.fonts.ready.then(moveTabIndicator); // tab widths can change once fonts settle
 
 if (Array.isArray(window.FONT_CATALOG)) {
   const rank = (f) => { const i = FEATURED.indexOf(f.family); return i < 0 ? 999 : i; };
