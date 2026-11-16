@@ -1,7 +1,7 @@
 // Find My Type — native macOS shell.
 //
 // Hosts the UI (Resources/web) in a WKWebView and bridges it to macOS:
-//   • window.nativeFontCatalog(fresh) → installed fonts (system_profiler, cached on disk)
+//   • window.nativeFontCatalog(fresh) → installed fonts with real categories (Core Text, cached on disk)
 //   • window.nativeDownload(data, name) → save panel for exports
 //   • window.nativeSetTheme(dark)    → window appearance follows the in-app theme
 //   • menu commands → window.appCommand(name); File › Import → window.importFontFiles(...)
@@ -30,12 +30,13 @@ final class LocalContent: NSObject, WKURLSchemeHandler {
 
     init(root: URL) { self.root = root }
 
-    /// Saved font list, so later launches don't wait for system_profiler (can take a minute).
+    /// Saved font list, so launches show fonts instantly; refreshed quietly in the background.
     private lazy var cacheURL: URL = {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent(Bundle.main.bundleIdentifier ?? "FindMyType", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("font-catalog.json")
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("font-catalog.json")) // pre-v2 cache
+        return dir.appendingPathComponent("font-catalog-v2.json") // v2 adds categories
     }()
 
     /// JSON array of installed font faces.
@@ -85,51 +86,131 @@ final class LocalContent: NSObject, WKURLSchemeHandler {
         if let raw = try? scanInstalledFonts() { saveCache(raw) }
     }
 
-    /// Ask macOS for every installed, enabled font face.
+    /// Ask Core Text for every font available to this user, with its real classification
+    /// (read from the font's own OS/2 data), weight, width, slant and variable axes.
+    /// Takes about a second — much faster than system_profiler.
     private func scanInstalledFonts() throws -> [[String: Any]] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
-        process.arguments = ["SPFontsDataType", "-json"]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-        try process.run()
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        let collection = CTFontCollectionCreateFromAvailableFonts(nil)
+        guard let descriptors = CTFontCollectionCreateMatchingFontDescriptors(collection) as? [CTFontDescriptor] else {
+            throw NSError(domain: "Fonts", code: 1)
+        }
 
-        guard process.terminationStatus == 0,
-              let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let entries = decoded["SPFontsDataType"] as? [[String: Any]]
-        else { throw NSError(domain: "Fonts", code: 1) }
-
+        var created: [String: Double] = [:] // file path → creation time (ms)
+        var shapes: [String: String] = [:]  // family → shape-based guess (computed once per family)
         var faces: [[String: Any]] = []
-        for entry in entries {
-            guard entry["enabled"] as? String != "no",
-                  let path = entry["path"] as? String,
-                  FileManager.default.fileExists(atPath: path),
-                  let typefaces = entry["typefaces"] as? [[String: Any]]
+        for descriptor in descriptors {
+            func attribute<T>(_ key: CFString) -> T? { CTFontDescriptorCopyAttribute(descriptor, key) as? T }
+            guard let family: String = attribute(kCTFontFamilyNameAttribute), !family.hasPrefix("."),
+                  let url: URL = attribute(kCTFontURLAttribute), url.isFileURL
             else { continue }
+            let path = url.path
 
-            let url = URL(fileURLWithPath: path)
-            let created = (try? FileManager.default.attributesOfItem(atPath: path)[.creationDate]) as? Date
+            let traits: [String: Any] = attribute(kCTFontTraitsAttribute) ?? [:]
+            let symbolic = (traits[kCTFontSymbolicTrait as String] as? NSNumber)?.uint32Value ?? 0
+            let weightTrait = (traits[kCTFontWeightTrait as String] as? NSNumber)?.doubleValue ?? 0
+            let widthTrait = (traits[kCTFontWidthTrait as String] as? NSNumber)?.doubleValue ?? 0
+            let font = CTFontCreateWithFontDescriptor(descriptor, 12, nil)
+            let axes = CTFontCopyVariationAxes(font) as? [Any] ?? []
 
-            for face in typefaces {
-                guard face["enabled"] as? String != "no",
-                      let family = face["family"] as? String,
-                      !family.hasPrefix(".")
-                else { continue }
-                faces.append([
-                    "family": family,
-                    "style": face["style"] as? String ?? "Regular",
-                    "fullName": face["fullname"] as? String ?? family,
-                    "postscriptName": face["_name"] as? String ?? "",
-                    "path": path,
-                    "extension": "." + url.pathExtension.lowercased(),
-                    "installedAt": (created?.timeIntervalSince1970 ?? 0) * 1000,
-                ])
+            if created[path] == nil {
+                let date = (try? FileManager.default.attributesOfItem(atPath: path)[.creationDate]) as? Date
+                created[path] = (date?.timeIntervalSince1970 ?? 0) * 1000
             }
+
+            var face: [String: Any] = [
+                "family": family,
+                "style": attribute(kCTFontStyleNameAttribute) ?? "Regular",
+                "fullName": attribute(kCTFontDisplayNameAttribute) ?? family,
+                "postscriptName": attribute(kCTFontNameAttribute) ?? "",
+                "path": path,
+                "extension": "." + url.pathExtension.lowercased(),
+                "installedAt": created[path] ?? 0,
+                "weight": Self.cssWeight(weightTrait),
+                "italic": symbolic & CTFontSymbolicTraits.traitItalic.rawValue != 0,
+                "width": (symbolic & CTFontSymbolicTraits.traitCondensed.rawValue != 0 || widthTrait < -0.1) ? "condensed"
+                    : (symbolic & CTFontSymbolicTraits.traitExpanded.rawValue != 0 || widthTrait > 0.1) ? "expanded" : "normal",
+                "variable": !axes.isEmpty,
+            ]
+            if let category = Self.category(symbolic) ?? Self.panoseCategory(font) {
+                face["category"] = category
+            } else if symbolic & CTFontSymbolicTraits.traitItalic.rawValue == 0 {
+                if shapes[family] == nil { shapes[family] = Self.shapeCategory(font) ?? "" }
+                if let shape = shapes[family], !shape.isEmpty { face["shapeCategory"] = shape }
+            }
+            faces.append(face)
         }
         return faces
+    }
+
+    /// Core Text weight trait (-1…1) → nearest CSS weight (100…900).
+    private static func cssWeight(_ trait: Double) -> Int {
+        let scale: [(Double, Int)] = [(-0.8, 100), (-0.6, 200), (-0.4, 300), (0, 400), (0.23, 500), (0.3, 600), (0.4, 700), (0.56, 800), (0.62, 900)]
+        return scale.min { abs($0.0 - trait) < abs($1.0 - trait) }!.1
+    }
+
+    /// Fallback: the PANOSE classification in the font's OS/2 table (bytes 32–41).
+    private static func panoseCategory(_ font: CTFont) -> String? {
+        guard let table = CTFontCopyTable(font, CTFontTableTag(kCTFontTableOS2), []) as Data?, table.count >= 42 else { return nil }
+        let familyType = table[32], serifStyle = table[33], proportion = table[35]
+        switch familyType {
+        case 2: // Latin text
+            if proportion == 9 { return "Monospace" }
+            switch serifStyle {
+            case 2...10: return "Serif"
+            case 11...15: return "Sans serif"
+            default: return nil
+            }
+        case 3: return "Handwriting"
+        case 4, 5: return "Display"
+        default: return nil
+        }
+    }
+
+    /// Last resort for fonts with no classification: look at the letters.
+    /// Monospace if "i" and "M" have the same advance; serif if the capital "I" is
+    /// much wider at its ends than in the middle.
+    private static func shapeCategory(_ font: CTFont) -> String? {
+        var chars = Array("IiM".utf16)
+        var glyphs = [CGGlyph](repeating: 0, count: 3)
+        guard CTFontGetGlyphsForCharacters(font, &chars, &glyphs, 3), !glyphs.contains(0) else { return nil }
+
+        var advances = [CGSize](repeating: .zero, count: 3)
+        CTFontGetAdvancesForGlyphs(font, .horizontal, glyphs, &advances, 3)
+        if advances[2].width > 0, abs(advances[1].width - advances[2].width) < advances[2].width * 0.01 { return "Monospace" }
+
+        let big = CTFontCreateCopyWithAttributes(font, 100, nil, nil)
+        guard let path = CTFontCreatePathForGlyph(big, glyphs[0], nil) else { return nil }
+        let box = path.boundingBox
+        guard box.width > 2, box.height > 20 else { return nil }
+        let w = Int(box.width.rounded(.up)) + 4, h = Int(box.height.rounded(.up)) + 4
+        guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let raw = ctx.data else { return nil }
+        ctx.translateBy(x: 2 - box.minX, y: 2 - box.minY)
+        ctx.addPath(path)
+        ctx.setFillColor(gray: 1, alpha: 1)
+        ctx.fillPath()
+        let pixels = raw.bindMemory(to: UInt8.self, capacity: w * h)
+        func ink(_ row: Int) -> Int { (0..<w).reduce(0) { $0 + (pixels[row * w + $1] > 127 ? 1 : 0) } }
+
+        let inset = max(1, Int(box.height * 0.05))
+        let middle = ink(h / 2)
+        guard middle > 0 else { return nil }
+        let ends = max(ink(2 + inset), ink(h - 3 - inset))
+        return Double(ends) / Double(middle) > 1.5 ? "Serif" : "Sans serif"
+    }
+
+    /// The font's declared design class (OS/2 sFamilyClass, via Core Text). nil = not declared.
+    private static func category(_ symbolic: UInt32) -> String? {
+        if symbolic & CTFontSymbolicTraits.traitMonoSpace.rawValue != 0 { return "Monospace" }
+        switch CTFontStylisticClass(rawValue: symbolic & CTFontSymbolicTraits.traitClassMask.rawValue) {
+        case .classOldStyleSerifs, .classTransitionalSerifs, .classModernSerifs,
+             .classClarendonSerifs, .classSlabSerifs, .classFreeformSerifs: return "Serif"
+        case .classSansSerif: return "Sans serif"
+        case .classScripts: return "Handwriting"
+        case .classOrnamentals, .classSymbolic: return "Display"
+        default: return nil
+        }
     }
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {

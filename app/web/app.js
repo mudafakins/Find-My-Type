@@ -243,7 +243,7 @@ function settingsFor(f) {
 function tags(f) {
   if (f._tags) return f._tags;
   const result = f._tags = [f.category];
-  if (/condensed|narrow|compressed/i.test(f.family)) result.push('Condensed');
+  if (f.condensed || /condensed|narrow|compressed/i.test(f.family)) result.push('Condensed');
   if (/tall|bebas|oswald|anton|condensed/i.test(f.family)) result.push('Tall');
   if (f.weights.some((w) => w >= 700)) result.push('Bold');
   if (f.variable) result.push('Variable');
@@ -606,7 +606,7 @@ function createCard(f) {
   const head = h('div', { className: 'card-head' },
     h('div', { className: 'card-title' },
       h('strong', { textContent: f.family, title: f.family }),
-      h('span', { className: 'card-meta', textContent: details.join(' · ') }),
+      h('span', { className: 'card-meta', textContent: details.join(' · '), title: CATEGORY_SOURCES[f.categorySource] || '' }),
     ),
     heart,
   );
@@ -710,8 +710,42 @@ const refreshAllCards = () => document.querySelectorAll('.card').forEach(updateC
    Local fonts: connect + import
    ========================================================================= */
 
-/** Ask the Mac app for installed font faces; registers each under a private alias. */
-async function readMacFonts(fresh) {
+const CATEGORY_SOURCES = {
+  font: 'Category read from the font file',
+  catalog: 'Category from the Google Fonts catalogue',
+  name: 'Category estimated from the font’s name',
+  shape: 'Category estimated from the letter shapes',
+};
+
+/**
+ * Pick a family's category from the best evidence available:
+ *   1. declared in the font file (OS/2 class / PANOSE)  2. Google Fonts catalogue
+ *   3. unmistakable name words (Script, Mono…)          4. letter-shape analysis
+ *   5. any other hint in the name
+ */
+function resolveCategory(family, declared, shape) {
+  if (declared) return [declared, 'font'];
+  const google = googleCategories().get(family.toLowerCase());
+  if (google) return [google, 'catalog'];
+  if (/script|hand(writ)?|brush|callig|signature/i.test(family)) return ['Handwriting', 'name'];
+  if (/\bmono\b|mono$|courier|console|code/i.test(family)) return ['Monospace', 'name'];
+  if (shape) return [shape, 'shape'];
+  return [inferCategory(family), 'name'];
+}
+
+let googleCategoryMap = null;
+function googleCategories() {
+  googleCategoryMap ||= new Map(state.googleFonts.map((g) => [g.family.toLowerCase(), g.category]));
+  return googleCategoryMap;
+}
+
+/**
+ * Ask the app for installed font faces and group them into families.
+ * Each face: family, style, fullName, postscriptName, file, extension, installedAt,
+ * plus (from the font data) weight, italic, width, variable, category / shapeCategory.
+ * Every face is registered under a private alias so previews use exactly that file.
+ */
+async function readInstalledFonts(fresh) {
   const faces = await window.nativeFontCatalog(fresh);
 
   const map = new Map();
@@ -720,27 +754,41 @@ async function readMacFonts(fresh) {
     if (!map.has(face.family)) {
       map.set(face.family, {
         family: face.family,
-        alias: 'MacLocal' + map.size,
-        category: inferCategory(face.family),
+        alias: 'LocalFont' + map.size,
         source: 'local',
         weights: [],
         variable: false,
         installedAt: face.installedAt || 0,
+        _declared: null, _shape: null, _widths: [],
       });
     }
     const f = map.get(face.family);
     f.installedAt = Math.max(f.installedAt || 0, face.installedAt || 0);
-    const weight = weightFromStyle(face.style);
-    if (!f.weights.includes(weight)) f.weights.push(weight);
+    f._declared ||= face.category || null;
+    f._shape ||= face.shapeCategory || null;
+    f.variable ||= !!face.variable;
 
-    const italic = /italic|oblique/i.test(face.style);
+    // Weight: the font's own value, unless it's the default and the style name says otherwise.
+    const named = weightFromStyle(face.style);
+    const weight = face.weight && face.weight !== 400 ? face.weight : named;
+    if (!f.weights.includes(weight)) f.weights.push(weight);
+    const italic = face.italic ?? /italic|oblique/i.test(face.style);
+    if (!italic) f._widths.push(face.width || 'normal');
+
     const sources = [`local(${JSON.stringify(face.postscriptName)})`, `local(${JSON.stringify(face.fullName)})`];
     if (['.ttf', '.otf', '.woff', '.woff2'].includes(face.extension)) sources.push(`url(${JSON.stringify(face.file)})`);
     rules.push(`@font-face{font-family:${JSON.stringify(f.alias)};src:${sources.join(',')};font-weight:${weight};font-style:${italic ? 'italic' : 'normal'};font-display:swap;}`);
   }
 
-  let style = $('#mac-local-faces');
-  if (!style) document.head.append(style = h('style', { id: 'mac-local-faces' }));
+  for (const f of map.values()) {
+    [f.category, f.categorySource] = resolveCategory(f.family, f._declared, f._shape);
+    // Condensed when the family's upright faces are (mostly) condensed.
+    f.condensed = f._widths.length > 0 && f._widths.filter((w) => w === 'condensed').length / f._widths.length >= 0.5;
+    delete f._declared; delete f._shape; delete f._widths;
+  }
+
+  let style = $('#local-font-faces');
+  if (!style) document.head.append(style = h('style', { id: 'local-font-faces' }));
   style.textContent = rules.join('\n');
   return sortFamilies(map);
 }
@@ -761,7 +809,7 @@ async function connectLocalFonts({ silent = false, fresh = false, trigger = null
     { tone: 'progress', id: 'connect' });
 
   try {
-    const families = await readMacFonts(fresh);
+    const families = await readInstalledFonts(fresh);
     const imported = state.localFonts.filter((f) => f.imported); // keep this session's imports
     state.localFonts = [...families, ...imported];
     state.localStatus = 'ready';
@@ -840,7 +888,8 @@ async function importFontFiles(files) {
       await face.load();
       document.fonts.add(face);
       const family = file.name.replace(/\.(ttf|otf|woff2?)$/i, '');
-      state.localFonts.push({ family, alias, category: inferCategory(family), source: 'local', weights: [400], variable: false, imported: true });
+      const [category, categorySource] = resolveCategory(family, null, null);
+      state.localFonts.push({ family, alias, category, categorySource, source: 'local', weights: [400], variable: false, imported: true });
       imported++;
     } catch {
       message('Couldn’t read ' + file.name + ' — is it a .ttf, .otf, .woff or .woff2 file?', { tone: 'error' });
