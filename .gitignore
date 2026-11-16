@@ -11,3 +11,7 @@ app/windows/obj/
 publish/
 # Local editor/agent settings
 .claude/
+# Snapshots of this Mac's installed fonts (kept locally, never published)
+Source Code/can-x20/work/mac-fonts.json
+Source Code/can-x20/work/safari-font-check.json
+Source Code/can-x20/work/local-catalog-check.json
