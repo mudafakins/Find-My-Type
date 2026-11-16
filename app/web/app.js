@@ -2,11 +2,10 @@
 /*
  * Find My Type — preview a company name in every font you have.
  *
- * Runs in three environments:
- *   1. The native Mac app (native/FindMyType.swift) — provides window.nativeFontCatalog
- *      and window.nativeDownload bridges.
- *   2. serve.py in any browser — provides /api/local-fonts.
- *   3. Chrome/Edge with the Local Font Access API (window.queryLocalFonts).
+ * This is the UI of the macOS app. native/FindMyType.swift hosts it in a WKWebView
+ * and provides two bridges:
+ *   window.nativeFontCatalog(fresh) → installed font faces (cached on disk by the app)
+ *   window.nativeDownload(dataURL, name) → save a file with the macOS save panel
  */
 
 /* =========================================================================
@@ -76,7 +75,6 @@ const el = {
   count: $('#count'),
   grid: $('#grid'),
   sentinel: $('#sentinel'),
-  exportButton: $('#export'),
   theme: $('#theme'),
   rescan: $('#rescan'),
   import: $('#import'),
@@ -203,7 +201,11 @@ function persist() {
       fontsPrompted: state.fontsPrompted,
     }));
   } catch { /* storage full or unavailable — non-fatal */ }
+  onFavouritesChanged(); // keep the shortlist badge/drawer current
 }
+
+/** Replaced by the shortlist drawer once it's set up. */
+let onFavouritesChanged = () => {};
 
 for (const key of ['word', 'ink', 'paper', 'size']) if (saved[key]) el[key].value = saved[key];
 
@@ -331,7 +333,7 @@ async function loadCardFont(card) {
   const f = card._font;
   try {
     await withTimeout(loadGoogleStylesheet(f), 15000);
-    // Font files can be slow; after 8s reveal anyway (browser falls back, then swaps in).
+    // Font files can be slow; after 8s reveal anyway (a fallback shows, then the font swaps in).
     await Promise.race([document.fonts.load(fontSpec(f, settingsFor(f)), previewWord()), delay(8000)]);
   } catch {
     card.classList.add('failed');
@@ -537,7 +539,7 @@ function emptyState(query) {
   }
   if (state.filter === FAVOURITES && !query) {
     return view('heart', 'No favourites yet',
-      'Tap the heart on any font to add it to your shortlist. Export the shortlist as PNG sheets when you’re ready.',
+      'Tap the heart on any font to add it to your shortlist. Open Shortlist to compare them and export PNG or PDF.',
       [{ label: 'Browse all fonts', primary: true, onClick: () => { state.filter = ALL; render(); } }]);
   }
   const actions = [];
@@ -708,30 +710,9 @@ const refreshAllCards = () => document.querySelectorAll('.card').forEach(updateC
    Local fonts: connect + import
    ========================================================================= */
 
-/** Chrome/Edge: Local Font Access API → family list (system fonts, no aliases needed). */
-async function readBrowserFonts() {
-  const map = new Map();
-  for (const font of await window.queryLocalFonts()) {
-    if (!map.has(font.family)) {
-      map.set(font.family, { family: font.family, category: inferCategory(font.family), source: 'local', weights: [], variable: false });
-    }
-    const f = map.get(font.family);
-    const w = weightFromStyle(font.style);
-    if (!f.weights.includes(w)) f.weights.push(w);
-  }
-  return sortFamilies(map);
-}
-
-/** Mac app or serve.py → face list; registers each face under a private alias. */
+/** Ask the Mac app for installed font faces; registers each under a private alias. */
 async function readMacFonts(fresh) {
-  let faces;
-  if (window.nativeFontCatalog) {
-    faces = await window.nativeFontCatalog(fresh);
-  } else {
-    const response = await fetch('/api/local-fonts');
-    if (!response.ok) throw new Error('Font service unavailable');
-    faces = await response.json();
-  }
+  const faces = await window.nativeFontCatalog(fresh);
 
   const map = new Map();
   const rules = [];
@@ -780,7 +761,7 @@ async function connectLocalFonts({ silent = false, fresh = false, trigger = null
     { tone: 'progress', id: 'connect' });
 
   try {
-    const families = window.queryLocalFonts ? await readBrowserFonts() : await readMacFonts(fresh);
+    const families = await readMacFonts(fresh);
     const imported = state.localFonts.filter((f) => f.imported); // keep this session's imports
     state.localFonts = [...families, ...imported];
     state.localStatus = 'ready';
@@ -798,10 +779,7 @@ async function connectLocalFonts({ silent = false, fresh = false, trigger = null
     state.localStatus = 'idle';
     progress?.dismiss(true);
     if (!silent) {
-      const hint = window.queryLocalFonts ? 'Font access wasn’t granted. Try again, or import font files instead.'
-        : window.nativeFontCatalog ? 'Couldn’t read your installed fonts. Quit and reopen Find My Type, then try again.'
-        : 'Couldn’t reach the Mac font service. Restart it with “Launch Find My Type.command”, then try again.';
-      message(hint, { tone: 'error' });
+      message('Couldn’t read your installed fonts. Quit and reopen Find My Type, then try again.', { tone: 'error' });
     }
     if (state.source === 'local') render();
   } finally {
@@ -873,20 +851,33 @@ async function importFontFiles(files) {
 }
 
 /* =========================================================================
-   Export shortlist (PNG sheets + TXT details)
+   Shortlist data
    ========================================================================= */
 
-/** Mac app: hand data to the native save panel. Browser: normal download. */
-function downloadFile(blob, name) {
-  if (window.nativeDownload) {
-    const reader = new FileReader();
-    reader.onload = () => window.nativeDownload(reader.result, name);
-    reader.readAsDataURL(blob);
-    return;
+/** Favourites in the order they were added: { list: loaded fonts, missing: keys not loaded }. */
+function shortlist() {
+  const byId = new Map([...state.googleFonts, ...state.localFonts].map((f) => [fontId(f), f]));
+  const list = [];
+  const missing = [];
+  for (const key of state.favorites) {
+    const f = byId.get(key);
+    if (f) list.push(f); else missing.push(key);
   }
-  const url = URL.createObjectURL(blob);
-  h('a', { href: url, download: name }).click();
-  setTimeout(() => URL.revokeObjectURL(url), 30000);
+  return { list, missing };
+}
+
+const weightLabel = (w) => `${w} ${weightName(w)}`.trim();
+const styleSummary = (f, s) => [weightLabel(s.weight), s.italic ? 'Italic' : null, s.spacing ? `${formatTracking(s.spacing)} tracking` : null].filter(Boolean).join(' · ');
+
+/* =========================================================================
+   Export (PNG sheets + TXT, or one PDF)
+   ========================================================================= */
+
+/** Hand a file to the Mac app, which shows a save panel for it. */
+function downloadFile(blob, name) {
+  const reader = new FileReader();
+  reader.onload = () => window.nativeDownload(reader.result, name);
+  reader.readAsDataURL(blob);
 }
 
 /** Make sure every favourite face is loaded before drawing it on canvas. */
@@ -897,7 +888,7 @@ async function prepareFonts(list, word) {
   for (const f of list) await document.fonts.load(fontSpec(f, settingsFor(f)), word);
 }
 
-/** Draw one line of the wordmark centred in a card, shrinking it to fit. */
+/** Draw one line of the wordmark centred at (centerX, y), shrinking it to fit. */
 function drawWordmark(ctx, f, s, text, centerX, y, maxWidth, size) {
   const tracking = +s.spacing || 0;
   const chars = Array.from(text);
@@ -924,85 +915,198 @@ function drawWordmark(ctx, f, s, text, centerX, y, maxWidth, size) {
   }
 }
 
-async function renderSheet(group, { name, bg, ink, size }) {
-  const cols = Math.min(3, group.length);
-  const cw = 480, ch = 350, gap = 20, margin = 24, scale = 2;
-  const rows = Math.ceil(group.length / cols);
-  const width = cols * cw + (cols - 1) * gap + margin * 2;
-  const height = rows * ch + (rows - 1) * gap + margin * 2;
+/* ---- Sheet layout (all sizes in CSS px; drawn at 2× for crisp output) ---- */
+const SHEET = {
+  cols: 3, cardW: 480, cardH: 330, gap: 20, margin: 48, headerH: 104, footerH: 48, scale: 2, perSheet: 12,
+  uiFont: '-apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif',
+};
+const sheetColours = () => (isDark()
+  ? { page: '#141414', text: '#f0f0f0', muted: '#8f8f8f', line: '#2e2e2e' }
+  : { page: '#f4f4f4', text: '#1a1a1a', muted: '#6e6e6e', line: '#e2e2e2' });
 
-  const canvas = h('canvas', { width: width * scale, height: height * scale });
+function sheetWidth() { return SHEET.cols * SHEET.cardW + (SHEET.cols - 1) * SHEET.gap + SHEET.margin * 2; }
+
+function createSheetCanvas(height) {
+  const width = sheetWidth();
+  const canvas = h('canvas', { width: width * SHEET.scale, height: height * SHEET.scale });
   const ctx = canvas.getContext('2d');
-  ctx.scale(scale, scale);
-  ctx.fillStyle = isDark() ? '#141414' : '#f4f4f4';
+  ctx.scale(SHEET.scale, SHEET.scale);
+  const c = sheetColours();
+  ctx.fillStyle = c.page;
   ctx.fillRect(0, 0, width, height);
+  return { canvas, ctx, width, colours: c };
+}
+
+/** Title block at the top of every page. */
+function drawSheetHeader(ctx, width, colours, { name, title, pageLabel }) {
+  const { margin, uiFont } = SHEET;
+  ctx.textBaseline = 'alphabetic';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = colours.text;
+  ctx.font = `600 30px ${uiFont}`;
+  ctx.fillText(name, margin, margin + 30, width - margin * 2 - 220);
+  ctx.fillStyle = colours.muted;
+  ctx.font = `400 14px ${uiFont}`;
+  ctx.fillText(title, margin, margin + 56);
+  ctx.textAlign = 'right';
+  ctx.fillText(pageLabel, width - margin, margin + 30);
+  ctx.fillStyle = colours.line;
+  ctx.fillRect(margin, margin + SHEET.headerH - 24, width - margin * 2, 1);
+}
+
+function drawSheetFooter(ctx, width, height, colours) {
+  ctx.fillStyle = colours.muted;
+  ctx.font = `400 12px ${SHEET.uiFont}`;
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText('Made with Find My Type', width - SHEET.margin, height - SHEET.margin / 2 - 4);
+}
+
+function roundedRect(ctx, x, y, w, hgt, r) {
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(x, y, w, hgt, r); else ctx.rect(x, y, w, hgt);
+  ctx.fill();
+}
+
+/** One page of font cards. */
+function drawCardsSheet(group, startIndex, opts) {
+  const { cols, cardW, cardH, gap, margin, headerH, footerH, uiFont } = SHEET;
+  const rows = Math.ceil(group.length / cols);
+  const height = margin + headerH + rows * cardH + (rows - 1) * gap + footerH + margin / 2;
+  const { canvas, ctx, width, colours } = createSheetCanvas(height);
+  drawSheetHeader(ctx, width, colours, opts.header);
 
   group.forEach((f, i) => {
     const s = settingsFor(f);
-    const x = margin + (i % cols) * (cw + gap);
-    const y = margin + Math.floor(i / cols) * (ch + gap);
+    const x = margin + (i % cols) * (cardW + gap);
+    const y = margin + headerH + Math.floor(i / cols) * (cardH + gap);
 
-    ctx.fillStyle = bg;
-    ctx.fillRect(x, y, cw, ch);
-    ctx.strokeStyle = '#88888855';
-    ctx.strokeRect(x + 0.5, y + 0.5, cw - 1, ch - 1);
+    ctx.fillStyle = opts.paper;
+    roundedRect(ctx, x, y, cardW, cardH, 16);
 
-    ctx.fillStyle = ink;
+    // Number + family name, then details
+    ctx.fillStyle = opts.ink;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = `600 15px ${uiFont}`;
+    ctx.fillText(`${startIndex + i + 1}.  ${f.family}`, x + 24, y + 38, cardW - 48);
+    ctx.globalAlpha = 0.55;
+    ctx.font = `400 12px ${uiFont}`;
+    ctx.fillText(`${f.category} · ${styleSummary(f, s)}`, x + 24, y + 58, cardW - 48);
+    ctx.globalAlpha = 1;
+
+    // Wordmark: uppercase + lowercase
     ctx.textBaseline = 'middle';
-    ctx.font = '14px Arial';
-    ctx.textAlign = 'left';
-    ctx.fillText(f.family, x + 20, y + 27, cw - 70);
-    ctx.textAlign = 'right';
-    ctx.fillText('♥', x + cw - 20, y + 27);
-
-    drawWordmark(ctx, f, s, name.toUpperCase(), x + cw / 2, y + 130, cw - 40, size);
-    drawWordmark(ctx, f, s, name.toLowerCase(), x + cw / 2, y + 230, cw - 40, size);
-
-    ctx.textAlign = 'left';
-    ctx.font = '11px Arial';
-    ctx.fillText(f.category.toUpperCase(), x + 20, y + ch - 45);
-    ctx.fillText(`Weight ${s.weight} · ${s.italic ? 'Italic' : 'Normal'} · Tracking ${s.spacing}px`, x + 20, y + ch - 22);
+    drawWordmark(ctx, f, s, opts.name.toUpperCase(), x + cardW / 2, y + 160, cardW - 56, opts.size);
+    drawWordmark(ctx, f, s, opts.name.toLowerCase(), x + cardW / 2, y + 250, cardW - 56, opts.size);
   });
 
-  const blob = await new Promise((resolve, reject) => canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('PNG creation failed'))), 'image/png'));
-  canvas.width = canvas.height = 0; // free canvas memory (Safari)
-  return blob;
+  drawSheetFooter(ctx, width, height, colours);
+  return canvas;
 }
 
-function shortlistDetails(list, { name, bg, ink, size }) {
+/** A table of every font and its settings (last PDF page). */
+function drawDetailsSheet(list, opts) {
+  const { margin, headerH, footerH, uiFont } = SHEET;
+  const rowH = 44;
+  const height = margin + headerH + 32 + list.length * rowH + footerH + margin / 2;
+  const { canvas, ctx, width, colours } = createSheetCanvas(height);
+  drawSheetHeader(ctx, width, colours, { ...opts.header, title: 'Font details' });
+
+  const cols = [margin, margin + 360, margin + 560, margin + 860, margin + 1120];
+  const headY = margin + headerH + 8;
+  ctx.font = `600 12px ${uiFont}`;
+  ctx.fillStyle = colours.muted;
+  ctx.textAlign = 'left';
+  ['FONT', 'SOURCE', 'STYLE', 'AVAILABLE WEIGHTS', 'CATEGORY'].forEach((t, i) => ctx.fillText(t, cols[i], headY));
+
+  list.forEach((f, i) => {
+    const s = settingsFor(f);
+    const y = headY + 32 + i * rowH;
+    ctx.fillStyle = colours.line;
+    ctx.fillRect(margin, y - 22, width - margin * 2, 1);
+    ctx.fillStyle = colours.text;
+    ctx.font = `600 14px ${uiFont}`;
+    ctx.fillText(`${i + 1}.  ${f.family}`, cols[0], y, 340);
+    ctx.font = `400 13px ${uiFont}`;
+    ctx.fillText(f.source === 'google' ? 'Google Fonts' : 'Local / imported', cols[1], y, 190);
+    ctx.fillText(styleSummary(f, s), cols[2], y, 290);
+    ctx.fillText(f.weights.join(', ') + (f.variable ? ' (variable)' : ''), cols[3], y, 250);
+    ctx.fillText(f.category, cols[4], y, width - margin - cols[4]);
+  });
+
+  ctx.fillStyle = colours.muted;
+  ctx.font = `400 12px ${uiFont}`;
+  ctx.fillText(`Card colours: text ${opts.ink} on ${opts.paper} · Preview size ${opts.size}px`, margin, height - margin / 2 - 4);
+  drawSheetFooter(ctx, width, height, colours);
+  return canvas;
+}
+
+const canvasBlob = (canvas, type, quality) => new Promise((resolve, reject) =>
+  canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Image creation failed'))), type, quality));
+
+function shortlistDetails(list, { name, paper, ink, size }) {
   const lines = [
-    'FIND MY TYPE — FAVOURITE FONT SHORTLIST',
+    'FIND MY TYPE — FONT SHORTLIST',
     'Company: ' + name,
-    'Uppercase: ' + name.toUpperCase(),
-    'Lowercase: ' + name.toLowerCase(),
     'Text colour: ' + ink,
-    'Card background: ' + bg,
+    'Card background: ' + paper,
     'Preview size: ' + size + 'px',
-    'Font families: ' + list.length,
-    '', '',
+    'Fonts: ' + list.length,
+    '',
   ];
   list.forEach((f, i) => {
     const s = settingsFor(f);
     lines.push(
       `${i + 1}. ${f.family}`,
-      'Source: ' + (f.source === 'google' ? 'Google Fonts' : 'Local / imported'),
-      'Category: ' + f.category,
-      'Weight: ' + s.weight,
-      'Style: ' + (s.italic ? 'Italic (native or synthesized)' : 'Normal'),
-      'Letter spacing: ' + s.spacing + 'px',
-      'Available weights: ' + f.weights.join(', '),
-      'Variable font: ' + (f.variable ? 'Yes' : 'No / unknown for local fonts'),
+      '   Source: ' + (f.source === 'google' ? 'Google Fonts' : 'Local / imported'),
+      '   Category: ' + f.category,
+      '   Style: ' + styleSummary(f, s) + (s.italic ? ' (italic may be synthesized)' : ''),
+      '   Available weights: ' + f.weights.join(', ') + (f.variable ? ' (variable font)' : ''),
       '',
     );
   });
   return lines.join('\n');
 }
 
-const PER_SHEET = 18; // keeps canvas sizes and memory bounded
+/**
+ * Minimal PDF writer: one page per JPEG image, page size matching the image.
+ * images: [{ bytes: Uint8Array (JPEG), pxWidth, pxHeight, ptWidth, ptHeight }]
+ */
+function makePdf(images) {
+  const enc = new TextEncoder();
+  const chunks = [];
+  const offsets = [];
+  let length = 0;
+  const push = (data) => { const bytes = typeof data === 'string' ? enc.encode(data) : data; chunks.push(bytes); length += bytes.length; };
+  const obj = (n, ...parts) => { offsets[n] = length; push(`${n} 0 obj\n`); parts.forEach(push); push('\nendobj\n'); };
 
-async function exportShortlist() {
-  const list = [...state.googleFonts, ...state.localFonts].filter((f) => state.favorites.has(fontId(f)));
-  const missing = [...state.favorites].filter((key) => !list.some((f) => fontId(f) === key));
+  push('%PDF-1.4\n%âãÏÓ\n');
+  const kids = images.map((_, i) => `${3 + i * 3} 0 R`).join(' ');
+  obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+  obj(2, `<< /Type /Pages /Kids [${kids}] /Count ${images.length} >>`);
+  images.forEach((img, i) => {
+    const page = 3 + i * 3, content = page + 1, image = page + 2;
+    const w = img.ptWidth.toFixed(2), hh = img.ptHeight.toFixed(2);
+    obj(page, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${w} ${hh}] /Resources << /XObject << /Im${i} ${image} 0 R >> >> /Contents ${content} 0 R >>`);
+    const draw = `q ${w} 0 0 ${hh} 0 0 cm /Im${i} Do Q`;
+    obj(content, `<< /Length ${draw.length} >>\nstream\n${draw}\nendstream`);
+    obj(image, `<< /Type /XObject /Subtype /Image /Width ${img.pxWidth} /Height ${img.pxHeight} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${img.bytes.length} >>\nstream\n`, img.bytes, '\nendstream');
+  });
+
+  const count = 2 + images.length * 3;
+  const xref = length;
+  push(`xref\n0 ${count + 1}\n0000000000 65535 f \n` + offsets.slice(1).map((o) => String(o).padStart(10, '0') + ' 00000 n \n').join(''));
+  push(`trailer\n<< /Size ${count + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`);
+  return new Blob(chunks, { type: 'application/pdf' });
+}
+
+let exporting = false;
+
+/** Export the shortlist. format: 'png' (sheets + TXT) or 'pdf' (one file). */
+async function exportShortlist(format = 'png', trigger = null) {
+  if (exporting) return;
+  const { list, missing } = shortlist();
   if (missing.length) {
     message(`${missing.length} of your favourites ${missing.length === 1 ? 'is' : 'are'} local fonts that aren’t loaded. Connect your fonts (or re-import the files), then export again.`, {
       tone: 'error',
@@ -1011,42 +1115,193 @@ async function exportShortlist() {
     return;
   }
   if (!list.length) {
-    message('Your shortlist is empty. Tap the heart on fonts you like, then export.', {
-      action: { label: 'How?', onClick: () => { state.filter = FAVOURITES; render(); } },
-    });
+    message('Your shortlist is empty. Tap the heart on fonts you like, then export.');
     return;
   }
 
-  const restore = setBusy(el.exportButton, 'Exporting…');
+  exporting = true;
+  const restore = trigger ? setBusy(trigger, 'Exporting…') : null;
   const progress = message(`Loading ${list.length} ${list.length === 1 ? 'font' : 'fonts'}…`, { tone: 'progress', id: 'export' });
   try {
     const name = previewWord();
-    const options = { name, bg: el.paper.value, ink: el.ink.value, size: +el.size.value };
+    const opts = { name, paper: el.paper.value, ink: el.ink.value, size: +el.size.value };
+    const total = Math.ceil(list.length / SHEET.perSheet);
+    const date = new Date().toLocaleDateString(undefined, { day: 'numeric', month: 'long', year: 'numeric' });
+    const header = (page, pages) => ({ name, title: `Typeface shortlist · ${list.length} ${list.length === 1 ? 'font' : 'fonts'} · ${date}`, pageLabel: pages > 1 ? `${page} / ${pages}` : '' });
     await prepareFonts(list, name);
 
-    const sheets = [];
-    const total = Math.ceil(list.length / PER_SHEET);
-    for (let start = 0; start < list.length; start += PER_SHEET) {
-      progress.update(total > 1 ? `Drawing sheet ${sheets.length + 1} of ${total}…` : 'Drawing your sheet…');
-      sheets.push(await renderSheet(list.slice(start, start + PER_SHEET), options));
+    const slug = name.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '') || 'wordmark';
+    const pages = format === 'pdf' ? total + 1 : total;
+    const canvases = [];
+    for (let i = 0; i < total; i++) {
+      progress.update(total > 1 ? `Drawing page ${i + 1} of ${total}…` : 'Drawing your sheet…');
+      await delay(0); // let the toast repaint
+      canvases.push(drawCardsSheet(list.slice(i * SHEET.perSheet, (i + 1) * SHEET.perSheet), i * SHEET.perSheet, { ...opts, header: header(i + 1, pages) }));
     }
 
-    const slug = name.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '') || 'wordmark';
-    sheets.forEach((blob, i) => downloadFile(blob, `${slug}-favourites${sheets.length > 1 ? '-' + (i + 1) : ''}.png`));
-    downloadFile(new Blob([shortlistDetails(list, options)], { type: 'text/plain;charset=utf-8' }), `${slug}-font-details.txt`);
-    progress.dismiss(true);
-    message(`Exported ${list.length} ${list.length === 1 ? 'font' : 'fonts'}: ${sheets.length} PNG ${sheets.length === 1 ? 'sheet' : 'sheets'} + a details file.${window.nativeDownload ? '' : ' Allow multiple downloads if your browser asks.'}`, { tone: 'success' });
+    if (format === 'pdf') {
+      progress.update('Building PDF…');
+      canvases.push(drawDetailsSheet(list, { ...opts, header: header(pages, pages) }));
+      const images = [];
+      for (const canvas of canvases) {
+        const bytes = new Uint8Array(await (await canvasBlob(canvas, 'image/jpeg', 0.92)).arrayBuffer());
+        images.push({ bytes, pxWidth: canvas.width, pxHeight: canvas.height, ptWidth: canvas.width / SHEET.scale * 0.75, ptHeight: canvas.height / SHEET.scale * 0.75 });
+        canvas.width = canvas.height = 0; // free memory (Safari)
+      }
+      downloadFile(makePdf(images), `${slug}-shortlist.pdf`);
+      progress.dismiss(true);
+      message(`Exported a ${images.length}-page PDF of ${list.length} ${list.length === 1 ? 'font' : 'fonts'}.`, { tone: 'success' });
+    } else {
+      for (let i = 0; i < canvases.length; i++) {
+        const blob = await canvasBlob(canvases[i], 'image/png');
+        canvases[i].width = canvases[i].height = 0;
+        downloadFile(blob, `${slug}-shortlist${canvases.length > 1 ? '-' + (i + 1) : ''}.png`);
+      }
+      downloadFile(new Blob([shortlistDetails(list, opts)], { type: 'text/plain;charset=utf-8' }), `${slug}-font-details.txt`);
+      progress.dismiss(true);
+      message(`Exported ${list.length} ${list.length === 1 ? 'font' : 'fonts'}: ${canvases.length} PNG ${canvases.length === 1 ? 'sheet' : 'sheets'} + a details file.`, { tone: 'success' });
+    }
   } catch (error) {
     progress.dismiss(true);
     message('Export didn’t finish — some fonts may not have loaded. Check your connection and try again.', {
       tone: 'error',
-      action: { label: 'Retry', onClick: exportShortlist },
+      action: { label: 'Retry', onClick: () => exportShortlist(format) },
     });
     console.error(error);
   } finally {
-    restore();
+    exporting = false;
+    restore?.();
   }
 }
+
+/* =========================================================================
+   Shortlist drawer — compare favourites side by side
+   ========================================================================= */
+
+const drawer = (() => {
+  const panel = $('#shortlist');
+  const list = $('#shortlist-list');
+  const count = $('#shortlist-count');
+  const badge = $('#shortlist-badge');
+  const toggle = $('#shortlist-button');
+  let caseMode = 'both'; // 'both' | 'upper' | 'lower'
+  let queued = false;
+
+  const isOpen = () => !panel.hidden;
+
+  function open() {
+    panel.hidden = false;
+    document.body.classList.add('drawer-open');
+    toggle.setAttribute('aria-expanded', 'true');
+    renderList();
+    requestAnimationFrame(() => panel.classList.add('open'));
+    $('#shortlist-close').focus({ preventScroll: true });
+  }
+  function close() {
+    panel.classList.remove('open');
+    document.body.classList.remove('drawer-open');
+    toggle.setAttribute('aria-expanded', 'false');
+    setTimeout(() => { if (!panel.classList.contains('open')) panel.hidden = true; }, 260);
+  }
+
+  function row(f, index) {
+    const s = settingsFor(f);
+    loadGoogleStylesheet(f).catch(() => {});
+    const sample = h('div', { className: 'sl-sample' });
+    sample.style.background = el.paper.value;
+    sample.style.color = el.ink.value;
+    Object.assign(sample.style, { fontFamily: cssFamily(f) + ', sans-serif', fontWeight: s.weight, fontStyle: s.italic ? 'italic' : 'normal', letterSpacing: s.spacing + 'px' });
+    const word = previewWord();
+    const lines = caseMode === 'upper' ? [word.toUpperCase()] : caseMode === 'lower' ? [word.toLowerCase()] : [word.toUpperCase(), word.toLowerCase()];
+    sample.append(...lines.map((t) => h('div', { textContent: t })));
+
+    const remove = h('button', {
+      className: 'sl-remove', type: 'button', innerHTML: svg('<path d="M7 7l10 10M17 7 7 17"/>'),
+      title: 'Remove from shortlist', 'aria-label': 'Remove ' + f.family + ' from shortlist',
+      onClick: () => {
+        const key = fontId(f);
+        state.favorites.delete(key);
+        persist();
+        render();
+        message(`Removed ${f.family} from favourites.`, {
+          id: 'favourites',
+          action: { label: 'Undo', onClick: () => { state.favorites.add(key); persist(); render(); } },
+        });
+      },
+    });
+    return h('li', { className: 'sl-row' },
+      h('div', { className: 'sl-head' },
+        h('span', { className: 'sl-num', textContent: index + 1 }),
+        h('div', { className: 'sl-title' },
+          h('strong', { textContent: f.family }),
+          h('span', { textContent: `${f.category} · ${styleSummary(f, s)}` })),
+        remove),
+      sample);
+  }
+
+  /** Shrink each preview line to fit the drawer width. */
+  function fit() {
+    const size = Math.min(+el.size.value, 56);
+    for (const sample of list.querySelectorAll('.sl-sample')) {
+      const available = sample.clientWidth - 32;
+      for (const line of sample.children) {
+        line.style.fontSize = size + 'px';
+        if (line.scrollWidth > available) line.style.fontSize = Math.max(9, size * available / line.scrollWidth) + 'px';
+      }
+    }
+  }
+
+  function renderList() {
+    const { list: fonts, missing } = shortlist();
+    const n = fonts.length + missing.length;
+    count.textContent = `${n} ${n === 1 ? 'font' : 'fonts'}`;
+    $('#shortlist-footer').hidden = n === 0;
+    if (!n) {
+      list.replaceChildren(h('li', { className: 'sl-empty' },
+        h('div', { className: 'empty-icon', innerHTML: svg(EMPTY_ICONS.heart) }),
+        h('strong', { textContent: 'Nothing here yet' }),
+        h('span', { textContent: 'Tap the heart on any font card to add it. Your shortlist appears here so you can compare them side by side.' })));
+      return;
+    }
+    list.replaceChildren(
+      ...fonts.map(row),
+      ...missing.map((key) => h('li', { className: 'sl-row sl-missing' },
+        h('div', { className: 'sl-head' },
+          h('span', { className: 'sl-num', textContent: '–' }),
+          h('div', { className: 'sl-title' }, h('strong', { textContent: key.replace(/^\w+:/, '') }), h('span', { textContent: 'Local font not loaded — connect or re-import it' })))))
+    );
+    requestAnimationFrame(fit);
+    document.fonts.ready.then(() => requestAnimationFrame(fit));
+  }
+
+  /** Called whenever favourites or preview settings change. */
+  function sync() {
+    const n = state.favorites.size;
+    badge.textContent = n;
+    badge.hidden = n === 0;
+    if (!isOpen() || queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; renderList(); });
+  }
+
+  toggle.addEventListener('click', () => (isOpen() ? close() : open()));
+  $('#shortlist-close').addEventListener('click', close);
+  document.querySelectorAll('[data-case]').forEach((b) => b.addEventListener('click', () => {
+    caseMode = b.dataset.case;
+    document.querySelectorAll('[data-case]').forEach((x) => x.setAttribute('aria-pressed', x === b));
+    renderList();
+  }));
+  $('#export-png').addEventListener('click', (e) => exportShortlist('png', e.currentTarget));
+  $('#export-pdf').addEventListener('click', (e) => exportShortlist('pdf', e.currentTarget));
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isOpen() && !document.querySelector('.colour-popover:not([hidden]), dialog[open]')) close();
+  });
+  window.addEventListener('resize', () => isOpen() && fit());
+
+  onFavouritesChanged = sync;
+  sync();
+  return { sync, open };
+})();
 
 /* =========================================================================
    Popover helpers
@@ -1298,10 +1553,10 @@ el.search.addEventListener('keydown', (e) => {
 });
 el.clearSearch.addEventListener('click', (e) => { e.preventDefault(); clearSearch(); el.search.focus(); });
 
-// ⌘K / Ctrl+K anywhere, or "/" when not typing, focuses search.
+// ⌘K anywhere, or "/" when not typing, focuses search.
 document.addEventListener('keydown', (e) => {
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
-  if (((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') || (e.key === '/' && !typing)) {
+  if ((e.metaKey && e.key.toLowerCase() === 'k') || (e.key === '/' && !typing)) {
     e.preventDefault();
     el.search.focus();
     el.search.select();
@@ -1320,7 +1575,6 @@ document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('clic
 el.rescan.addEventListener('click', () => connectLocalFonts({ fresh: true, trigger: el.rescan }));
 el.import.addEventListener('click', () => el.files.click());
 el.files.addEventListener('change', async (e) => { await importFontFiles(e.target.files); e.target.value = ''; });
-el.exportButton.addEventListener('click', exportShortlist);
 el.clearFavourites.addEventListener('click', () => {
   const previous = [...state.favorites];
   if (!previous.length) { message('You don’t have any favourites yet.'); return; }
@@ -1348,7 +1602,6 @@ document.fonts.addEventListener('loadingdone', refreshAllCards);
    Boot
    ========================================================================= */
 
-if (!/Mac|iPhone|iPad/.test(navigator.platform)) $('.search-hint').textContent = 'Ctrl K';
 buildToolbar();
 setView(state.view);
 moveTabIndicator();

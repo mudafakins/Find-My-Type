@@ -23,9 +23,10 @@
           <input id="word" class="word-input" value="Forma" placeholder="Type a company name" maxlength="100">
         </div>
         <div class="header-right">
-          <button id="export">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5"/></svg>
-            <span>Export shortlist</span>
+          <button id="shortlist-button" class="shortlist-button" type="button" aria-controls="shortlist" aria-expanded="false" title="Compare and export your favourites">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20s-7.5-4.6-9.2-9.1C1.7 7.8 3.6 4.5 7 4.5c2 0 3.6 1.1 5 3 1.4-1.9 3-3 5-3 3.4 0 5.3 3.3 4.2 6.4C19.5 15.4 12 20 12 20Z"/></svg>
+            <span>Shortlist</span>
+            <span id="shortlist-badge" class="badge" hidden>0</span>
           </button>
           <button id="theme" title="Switch light / dark theme" aria-label="Toggle dark mode">
             <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 15.4A8.5 8.5 0 0 1 8.6 4 8.5 8.5 0 1 0 20 15.4Z"/></svg>
@@ -112,6 +113,35 @@
     <div id="grid" class="grid"></div>
     <div id="sentinel" class="sentinel"></div>
   </main>
+
+  <!-- Shortlist drawer: favourites side by side + export -->
+  <aside id="shortlist" class="drawer" aria-label="Shortlist" hidden>
+    <header class="drawer-head">
+      <div>
+        <h2 class="drawer-title">Shortlist</h2>
+        <span id="shortlist-count" class="drawer-sub"></span>
+      </div>
+      <div class="case-toggle" role="group" aria-label="Letter case">
+        <button type="button" data-case="both" aria-pressed="true" title="Both cases">Aa</button>
+        <button type="button" data-case="upper" aria-pressed="false" title="Uppercase">AA</button>
+        <button type="button" data-case="lower" aria-pressed="false" title="Lowercase">aa</button>
+      </div>
+      <button id="shortlist-close" class="icon-btn" type="button" aria-label="Close shortlist" title="Close (Esc)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+      </button>
+    </header>
+    <ol id="shortlist-list" class="drawer-list"></ol>
+    <footer id="shortlist-footer" class="drawer-foot">
+      <button id="export-png" type="button" class="btn-secondary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5"/></svg>
+        <span>PNG + details</span>
+      </button>
+      <button id="export-pdf" type="button" class="btn-primary">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5"/></svg>
+        <span>Export PDF</span>
+      </button>
+    </footer>
+  </aside>
 
   <script src="fonts.js"></script>
   <script src="app.js"></script>

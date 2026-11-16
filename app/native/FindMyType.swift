@@ -148,9 +148,6 @@ final class LocalContent: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
 
     private func response(for path: String) throws -> (Data, String) {
-        if path == "/api/local-fonts" {
-            return (try fontCatalog(), "application/json")
-        }
         if path.hasPrefix("/api/font/") {
             guard let file = files[String(path.dropFirst("/api/font/".count))] else {
                 throw NSError(domain: "MissingFont", code: 404)
