@@ -5,3 +5,9 @@
 Source Code/can-x20/work/typefolio/
 # Build output
 app/dist/
+# Windows build output
+app/windows/bin/
+app/windows/obj/
+publish/
+# Local editor/agent settings
+.claude/

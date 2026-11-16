@@ -1214,6 +1214,23 @@ button.busy:disabled { opacity: .8; }
 }
 .picker-done { width: 100%; margin-top: var(--space-2); min-height: var(--control-h-sm); }
 
+/* Windows in-app menu */
+.app-menu-button { width: var(--control-h); height: var(--control-h); }
+.app-menu { padding: var(--space-1); }
+.menu-item {
+  width: 100%;
+  justify-content: space-between;
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  font-weight: var(--weight-regular);
+  color: var(--text);
+}
+.menu-item:hover { background: var(--hover); }
+.menu-item kbd { font: inherit; font-size: var(--text-xs); color: var(--text-3); }
+.menu-sep { margin: var(--space-1) var(--space-2); border: 0; border-top: 1px solid var(--divider); }
+
 /* Palette presets popover */
 .palette-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: var(--space-2); }
 .palette-option {

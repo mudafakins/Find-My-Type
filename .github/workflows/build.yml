@@ -1,0 +1,88 @@
+# Builds the Mac and Windows apps on every push.
+# When you push a version tag (e.g. v2.1.0) it also publishes a GitHub Release with
+#   Find-My-Type-Mac.zip and Find-My-Type-Windows.zip
+# — the files the apps' "Check for Updates" downloads.
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    name: macOS app
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # build number = commit count
+
+      - name: Check the tag matches app/VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version="$(tr -d '[:space:]' < app/VERSION)"
+          if [ "${GITHUB_REF_NAME}" != "v${version}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} doesn't match app/VERSION (${version}). Run app/release.sh instead of tagging by hand."
+            exit 1
+          fi
+
+      - name: Build
+        env:
+          UPDATE_REPO: ${{ github.repository }}
+        run: app/build.sh --zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: app/dist/Find-My-Type-Mac.zip
+          if-no-files-found: error
+
+  windows:
+    name: Windows app
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $version = (Get-Content app/VERSION -Raw).Trim()
+          dotnet publish app/windows/FindMyType.Windows.csproj -c Release -o publish `
+            -p:Version=$version -p:UpdateRepo=${{ github.repository }}
+          if (-not (Test-Path publish/FindMyType.exe)) { throw "FindMyType.exe was not produced" }
+          if (-not (Test-Path publish/web/index.html)) { throw "web/ was not copied next to the exe" }
+          Compress-Archive -Path publish/* -DestinationPath Find-My-Type-Windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Find-My-Type-Windows.zip
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Find-My-Type-Mac.zip
+            dist/Find-My-Type-Windows.zip
+          generate_release_notes: true

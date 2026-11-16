@@ -46,6 +46,14 @@ const ICONS = {
 
 const $ = (selector) => document.querySelector(selector);
 
+/* Platform: set by the native shell's bridge script ('mac' | 'windows').
+   For previewing in a browser during development: index.html?platform=windows */
+window.appPlatform ??= new URLSearchParams(location.search).get('platform');
+const PLATFORM = window.appPlatform === 'windows' ? 'windows' : 'mac';
+const IS_WINDOWS = PLATFORM === 'windows';
+const COMPUTER = IS_WINDOWS ? 'this PC' : 'this Mac';
+const isModKey = (e) => (IS_WINDOWS ? e.ctrlKey : e.metaKey); // shortcut checks
+
 /**
  * Tiny element builder. Children are appended first so that properties like a
  * <select>'s value can refer to them. Keys starting with "on" become listeners;
@@ -530,7 +538,7 @@ function emptyState(query) {
   }
   if (state.source === 'local' && !state.localFonts.length) {
     return view('connect', 'Connect your fonts',
-      'See your company name in every font installed on this Mac. Fonts are read locally and never leave your computer. The first scan can take a minute.',
+      `See your company name in every font installed on ${COMPUTER}. Fonts are read locally and never leave your computer. It only takes a few seconds.`,
       [
         { label: 'Connect installed fonts', primary: true, onClick: (e) => connectLocalFonts({ trigger: e.currentTarget }) },
         { label: 'Import font files', onClick: () => el.files.click() },
@@ -796,7 +804,7 @@ async function readInstalledFonts(fresh) {
 /**
  * Connect (or reconnect) the fonts installed on this computer.
  *   silent  — automatic reconnect at launch: no toasts unless something useful to say
- *   fresh   — ignore the Mac app's saved font list and scan again (Rescan)
+ *   fresh   — ignore the app's saved font list and scan again (Rescan)
  *   trigger — button to show a spinner on
  */
 async function connectLocalFonts({ silent = false, fresh = false, trigger = null } = {}) {
@@ -827,7 +835,7 @@ async function connectLocalFonts({ silent = false, fresh = false, trigger = null
     state.localStatus = 'idle';
     progress?.dismiss(true);
     if (!silent) {
-      message('Couldn’t read your installed fonts. Quit and reopen Find My Type, then try again.', { tone: 'error' });
+      message('Couldn’t read your installed fonts. Close and reopen Find My Type, then try again.', { tone: 'error' });
     }
     if (state.source === 'local') render();
   } finally {
@@ -846,9 +854,9 @@ function showConnectPrompt() {
   const dialog = h('dialog', { className: 'modal', 'aria-labelledby': 'connect-title' });
   dialog.innerHTML = `
     <div class="modal-icon" aria-hidden="true">${svg(EMPTY_ICONS.connect)}</div>
-    <h2 id="connect-title" class="modal-title">Use the fonts on this Mac?</h2>
+    <h2 id="connect-title" class="modal-title">Use the fonts on ${COMPUTER}?</h2>
     <p class="modal-body">Find My Type can preview your company name in every font installed on this computer.
-      Fonts are read locally and never leave your Mac.</p>
+      Fonts are read locally and never leave your computer.</p>
     <p class="modal-note">You’ll only be asked once — after this, your fonts load automatically.</p>
     <div class="modal-actions">
       <button type="button" class="btn-secondary" data-choice="later">Not now</button>
@@ -922,7 +930,7 @@ const styleSummary = (f, s) => [weightLabel(s.weight), s.italic ? 'Italic' : nul
    Export (PNG sheets + TXT, or one PDF)
    ========================================================================= */
 
-/** Hand a file to the Mac app, which shows a save panel for it. */
+/** Hand a file to the app, which shows a save dialog for it. */
 function downloadFile(blob, name) {
   const reader = new FileReader();
   reader.onload = () => window.nativeDownload(reader.result, name);
@@ -1602,10 +1610,10 @@ el.search.addEventListener('keydown', (e) => {
 });
 el.clearSearch.addEventListener('click', (e) => { e.preventDefault(); clearSearch(); el.search.focus(); });
 
-// ⌘K anywhere, or "/" when not typing, focuses search.
+// ⌘K / Ctrl+K anywhere, or "/" when not typing, focuses search.
 document.addEventListener('keydown', (e) => {
   const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
-  if ((e.metaKey && e.key.toLowerCase() === 'k') || (e.key === '/' && !typing)) {
+  if ((isModKey(e) && e.key.toLowerCase() === 'k') || (e.key === '/' && !typing)) {
     e.preventDefault();
     el.search.focus();
     el.search.select();
@@ -1675,7 +1683,7 @@ if (state.fontsConnected) connectLocalFonts({ silent: true });
 else if (!state.fontsPrompted) setTimeout(showConnectPrompt, 400);
 
 /* =========================================================================
-   Mac app integration: menu commands, File › Import, drag & drop, native feel
+   App integration: menu commands, import, drag & drop, updates, native feel
    ========================================================================= */
 
 const DEFAULT_SIZE = 42;
@@ -1702,6 +1710,82 @@ window.appCommand = (command) => {
     case 'size-down': setPreviewSize(+el.size.value - 4); break;
     case 'size-reset': setPreviewSize(DEFAULT_SIZE); break;
     case 'toggle-theme': el.theme.click(); break;
+    case 'import': el.files.click(); break;
+    default: break;
+  }
+};
+
+/* ---- Windows: keyboard shortcuts (the Mac app uses its menu bar for these) ---- */
+if (IS_WINDOWS) {
+  const SHORTCUTS = {
+    'o': 'import', 'r': 'rescan', 'e': 'export-pdf', 'E': 'export-png', 'f': 'find', 'n': 'edit-name',
+    '1': 'source-google', '2': 'source-local', 'l': 'shortlist', '=': 'size-up', '+': 'size-up',
+    '-': 'size-down', '0': 'size-reset', 'D': 'toggle-theme',
+  };
+  document.addEventListener('keydown', (e) => {
+    if (!e.ctrlKey || e.altKey) return;
+    const key = e.shiftKey && e.key.length === 1 ? e.key.toUpperCase() : e.key.toLowerCase();
+    const command = SHORTCUTS[key];
+    if (!command) return;
+    e.preventDefault();
+    window.appCommand(command);
+  });
+}
+
+/* ---- Windows: in-app menu (the Mac app has a real menu bar instead) ---- */
+if (IS_WINDOWS) {
+  const trigger = $('#app-menu');
+  trigger.hidden = false;
+  const items = [
+    ['Import font files…', 'Ctrl+O', () => el.files.click()],
+    ['Rescan installed fonts', 'Ctrl+R', () => window.appCommand('rescan')],
+    null,
+    ['Export shortlist as PDF…', 'Ctrl+E', () => exportShortlist('pdf')],
+    ['Export shortlist as PNG…', 'Ctrl+Shift+E', () => exportShortlist('png')],
+    null,
+    ['Check for updates…', '', () => window.nativeCommand?.('check-updates')],
+    ['About Find My Type', '', () => window.nativeCommand?.('about')],
+  ];
+  const panel = h('div', { className: 'colour-popover app-menu', hidden: true, role: 'menu' },
+    ...items.map((item) => (item
+      ? h('button', { type: 'button', role: 'menuitem', className: 'menu-item', onClick: () => { close(); item[2](); } },
+        h('span', { textContent: item[0] }), h('kbd', { textContent: item[1] }))
+      : h('hr', { className: 'menu-sep' }))));
+  document.body.append(panel);
+  function close() { panel.hidden = true; trigger.setAttribute('aria-expanded', 'false'); }
+  trigger.addEventListener('click', () => {
+    if (!panel.hidden) { close(); return; }
+    panel.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    placePopover(panel, trigger, 280);
+    panel.style.left = Math.max(12, trigger.getBoundingClientRect().right - panel.offsetWidth) + 'px'; // right-align
+  });
+  document.addEventListener('pointerdown', (e) => { if (!panel.hidden && !panel.contains(e.target) && !trigger.contains(e.target)) close(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) { close(); trigger.focus(); } });
+  window.addEventListener('resize', close);
+}
+
+/* ---- Updates (both platforms): the native side checks GitHub Releases and reports here ---- */
+let updateProgress = null; // live toast while downloading/installing
+window.onUpdateStatus = (update) => {
+  if (update.state === 'downloading' || update.state === 'installing') {
+    const text = update.state === 'downloading' ? `Downloading update… ${update.progress ?? 0}%` : 'Installing the update — Find My Type will restart…';
+    if (updateProgress) updateProgress.update(text);
+    else updateProgress = message(text, { tone: 'progress', id: 'update' });
+    return;
+  }
+  updateProgress = null;
+  switch (update.state) {
+    case 'available':
+      message(`Find My Type ${update.version} is available — you have ${update.current}.`, {
+        id: 'update', duration: 0,
+        action: { label: 'Update now', onClick: () => window.nativeCommand?.('install-update') },
+      });
+      break;
+    case 'checking': message('Checking for updates…', { tone: 'progress', id: 'update' }); break;
+    case 'uptodate': message(`You’re up to date (version ${update.current}).`, { tone: 'success', id: 'update' }); break;
+    case 'unconfigured': message('Updates aren’t set up for this build yet.', { id: 'update' }); break;
+    case 'error': message(update.message || 'Couldn’t check for updates. Try again later.', { tone: 'error', id: 'update' }); break;
     default: break;
   }
 };
@@ -1730,10 +1814,11 @@ document.addEventListener('drop', (e) => {
   else message('Drop .ttf, .otf, .woff or .woff2 files to preview them.', { tone: 'error' });
 });
 
-// Feel like a Mac app: no web context menu outside text fields.
+// Feel like a native app: no web context menu outside text fields.
 document.addEventListener('contextmenu', (e) => {
   if (!e.target.closest('input, textarea')) e.preventDefault();
 });
 
-if (window.isMacApp) document.body.classList.add('mac-app');
+document.body.classList.add(IS_WINDOWS ? 'win-app' : 'mac-app');
+$('.search-hint').textContent = IS_WINDOWS ? 'Ctrl K' : '⌘K';
 window.nativeSetTheme?.(document.body.classList.contains('dark'));

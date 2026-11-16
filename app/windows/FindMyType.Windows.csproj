@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Find My Type for Windows: a WinForms window hosting the shared UI (../web) in WebView2.
+    Build (on Windows, or on GitHub Actions):
+      dotnet publish app/windows/FindMyType.Windows.csproj -c Release -o publish -p:Version=2.1.0 -p:UpdateRepo=owner/repo
+    Output: publish/FindMyType.exe + publish/web/ (self-contained, no .NET install needed).
+    Needs the Microsoft Edge WebView2 Runtime, which ships with Windows 10 and 11.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>FindMyType</AssemblyName>
+    <RootNamespace>FindMyType</RootNamespace>
+    <Product>Find My Type</Product>
+    <Description>Preview your company name in every font you have.</Description>
+    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <Version>2.1.0</Version>
+    <UpdateRepo></UpdateRepo>
+
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <DebugType>none</DebugType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+
+  <!-- GitHub repository to check for updates ("owner/repo"), baked in at build time. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="UpdateRepo" Value="$(UpdateRepo)" />
+  </ItemGroup>
+
+  <!-- The shared interface, copied next to the .exe as web/ -->
+  <ItemGroup>
+    <Content Include="..\web\**\*" LinkBase="web" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+</Project>

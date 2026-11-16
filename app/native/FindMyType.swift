@@ -244,6 +244,121 @@ final class LocalContent: NSObject, WKURLSchemeHandler {
     }
 }
 
+// MARK: - Updates (GitHub Releases)
+
+/// Checks the GitHub repository in Info.plist (FMTUpdateRepo, set by build.sh) for a newer
+/// release, downloads Find-My-Type-Mac.zip, checks it's this app, swaps it in and relaunches.
+final class Updater {
+    private let report: ([String: Any]) -> Void
+    private var latest: (version: String, url: URL)?
+    private var busy = false
+    private static let assetName = "Find-My-Type-Mac.zip"
+    private static let lastCheckKey = "LastUpdateCheck"
+
+    init(report: @escaping ([String: Any]) -> Void) { self.report = report }
+
+    private var current: String { Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0" }
+    private var repository: String? {
+        let repo = (Bundle.main.object(forInfoDictionaryKey: "FMTUpdateRepo") as? String)?.trimmingCharacters(in: .whitespaces)
+        return (repo?.contains("/") ?? false) ? repo : nil
+    }
+
+    /// userInitiated: show "checking" / "up to date" / errors. Automatic checks stay quiet unless there's an update.
+    func check(userInitiated: Bool) {
+        guard !busy else { return }
+        guard let repo = repository else { if userInitiated { report(["state": "unconfigured"]) }; return }
+        if !userInitiated, let last = UserDefaults.standard.object(forKey: Self.lastCheckKey) as? Date, Date().timeIntervalSince(last) < 86_400 { return }
+        if userInitiated { report(["state": "checking"]) }
+
+        var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(repo)/releases/latest")!)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("FindMyType-Updater", forHTTPHeaderField: "User-Agent")
+        URLSession.shared.dataTask(with: request) { data, response, _ in
+            DispatchQueue.main.async {
+                UserDefaults.standard.set(Date(), forKey: Self.lastCheckKey)
+                guard let data, (response as? HTTPURLResponse)?.statusCode == 200,
+                      let release = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let tag = release["tag_name"] as? String,
+                      let assets = release["assets"] as? [[String: Any]],
+                      let asset = assets.first(where: { $0["name"] as? String == Self.assetName }),
+                      let link = asset["browser_download_url"] as? String, let url = URL(string: link)
+                else {
+                    if userInitiated { self.report(["state": "error", "message": "Couldn’t reach the update server. Check your connection and try again."]) }
+                    return
+                }
+                let version = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+                if Self.isNewer(version, than: self.current) {
+                    self.latest = (version, url)
+                    self.report(["state": "available", "version": version, "current": self.current])
+                } else if userInitiated {
+                    self.report(["state": "uptodate", "current": self.current])
+                }
+            }
+        }.resume()
+    }
+
+    static func isNewer(_ a: String, than b: String) -> Bool {
+        let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
+        for i in 0..<max(x.count, y.count) {
+            let l = i < x.count ? x[i] : 0, r = i < y.count ? y[i] : 0
+            if l != r { return l > r }
+        }
+        return false
+    }
+
+    func install() {
+        guard let latest, !busy else { return }
+        busy = true
+        report(["state": "downloading", "progress": 0])
+        let task = URLSession.shared.downloadTask(with: latest.url) { file, response, error in
+            let fail = { (message: String) in DispatchQueue.main.async { self.busy = false; self.report(["state": "error", "message": message]) } }
+            guard let file, error == nil, (response as? HTTPURLResponse)?.statusCode == 200 else { return fail("The download didn’t finish. Try again later.") }
+            do {
+                let work = FileManager.default.temporaryDirectory.appendingPathComponent("FindMyTypeUpdate-\(UUID().uuidString)")
+                try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+                let zip = work.appendingPathComponent("update.zip")
+                try FileManager.default.moveItem(at: file, to: zip)
+                DispatchQueue.main.async { self.report(["state": "installing"]) }
+                try Self.run("/usr/bin/ditto", ["-x", "-k", zip.path, work.path])
+                guard let newApp = try FileManager.default.contentsOfDirectory(at: work, includingPropertiesForKeys: nil).first(where: { $0.pathExtension == "app" }),
+                      Bundle(url: newApp)?.bundleIdentifier == Bundle.main.bundleIdentifier
+                else { return fail("The downloaded update isn’t Find My Type. Nothing was changed.") }
+                try Self.run("/usr/bin/codesign", ["--verify", "--deep", newApp.path])
+
+                let target = Bundle.main.bundleURL
+                _ = try FileManager.default.replaceItemAt(target, withItemAt: newApp)
+                // Relaunch the new copy once this one has quit.
+                let relaunch = Process()
+                relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
+                relaunch.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", target.path]
+                try relaunch.run()
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            } catch {
+                fail("Couldn’t install the update. Move Find My Type into your Applications folder, then try again.")
+            }
+        }
+        var observation: NSKeyValueObservation?
+        var lastPercent = -1
+        observation = task.progress.observe(\.fractionCompleted) { progress, _ in
+            let percent = Int(progress.fractionCompleted * 100)
+            guard percent != lastPercent else { return } // only whole-percent changes
+            lastPercent = percent
+            DispatchQueue.main.async { self.report(["state": "downloading", "progress": percent]) }
+            if progress.fractionCompleted >= 1 { observation?.invalidate() }
+        }
+        task.resume()
+    }
+
+    private static func run(_ tool: String, _ arguments: [String]) throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tool)
+        process.arguments = arguments
+        try process.run()
+        process.waitUntilExit()
+        if process.terminationStatus != 0 { throw NSError(domain: "Updater", code: Int(process.terminationStatus)) }
+    }
+}
+
 // MARK: - Title bar drag strip
 
 /// The page fills the window (hidden title bar), so this transparent strip along the
@@ -269,13 +384,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     private var pendingExports: [(Data, String)] = []
     private var saving = false
     private var shown = false
+    private lazy var updater = Updater(report: { [weak self] status in self?.reportUpdate(status) })
 
     static let titlebarHeight: CGFloat = 28
     private static let lightBackground = NSColor(srgbRed: 0xf4 / 255, green: 0xf4 / 255, blue: 0xf4 / 255, alpha: 1)
     private static let darkBackground = NSColor(srgbRed: 0x14 / 255, green: 0x14 / 255, blue: 0x14 / 255, alpha: 1)
 
     private static let bridgeScript = """
-    window.isMacApp = true;
+    window.appPlatform = "mac";
+    window.nativeCommand = (name) => window.webkit.messageHandlers.command.postMessage(String(name));
     window.nativeFontCatalog = (fresh) => new Promise((resolve, reject) => {
       window.fontCatalogResolve = resolve;
       window.fontCatalogReject = reject;
@@ -291,7 +408,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         let config = WKWebViewConfiguration()
         content = LocalContent(root: Bundle.main.resourceURL!.appendingPathComponent("web"))
         config.setURLSchemeHandler(content, forURLScheme: "typefolio")
-        for name in ["saveExport", "loadFonts", "theme"] { config.userContentController.add(self, name: name) }
+        for name in ["saveExport", "loadFonts", "theme", "command"] { config.userContentController.add(self, name: name) }
         config.userContentController.addUserScript(WKUserScript(source: Self.bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         web = WKWebView(frame: .zero, configuration: config)
@@ -343,6 +460,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         // One more frame so the first paint (with the saved theme) is on screen.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.showWindow() }
+        // Quietly look for a new version (at most once a day).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { self.updater.check(userInitiated: false) }
     }
 
     /// Keep the app on its own page: never navigate away (e.g. a file dropped on the window).
@@ -400,6 +519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
         _ = submenu("Find My Type", [
             item("About Find My Type", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            item("Check for Updates…", #selector(checkForUpdates(_:)), target: self),
             sep(),
             item("Hide Find My Type", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
@@ -459,6 +579,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         NSApp.windowsMenu = windowMenu
     }
 
+    @objc private func checkForUpdates(_ sender: Any?) { updater.check(userInitiated: true) }
+
+    /// Send update progress to the page, which shows it as a toast.
+    private func reportUpdate(_ status: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: status), let json = String(data: data, encoding: .utf8) else { return }
+        web.evaluateJavaScript("window.onUpdateStatus && window.onUpdateStatus(\(json))", completionHandler: nil)
+    }
+
     /// Menu item → window.appCommand(name) in the page.
     @objc private func sendCommand(_ sender: NSMenuItem) {
         guard let name = sender.representedObject as? String else { return }
@@ -491,6 +619,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         case "loadFonts": sendFontCatalog(fresh: message.body as? String == "rescan")
         case "saveExport": queueExport(message.body)
         case "theme": applyTheme(dark: message.body as? Bool ?? false)
+        case "command":
+            switch message.body as? String {
+            case "check-updates": updater.check(userInitiated: true)
+            case "install-update": updater.install()
+            case "about": NSApp.orderFrontStandardAboutPanel(nil)
+            default: break
+            }
         default: break
         }
     }
