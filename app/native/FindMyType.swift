@@ -1,13 +1,16 @@
 // Find My Type — native macOS shell.
 //
-// Hosts the web UI (Resources/web) in a WKWebView and adds two bridges:
-//   • window.nativeFontCatalog()  → lists installed fonts via system_profiler
-//   • window.nativeDownload(data, name) → saves exports with an NSSavePanel
+// Hosts the UI (Resources/web) in a WKWebView and bridges it to macOS:
+//   • window.nativeFontCatalog(fresh) → installed fonts (system_profiler, cached on disk)
+//   • window.nativeDownload(data, name) → save panel for exports
+//   • window.nativeSetTheme(dark)    → window appearance follows the in-app theme
+//   • menu commands → window.appCommand(name); File › Import → window.importFontFiles(...)
 //
 // The "typefolio://" scheme name is kept from the MVP: WebKit keys localStorage
 // by origin, so changing it would lose users' saved favourites.
 
 import Cocoa
+import UniformTypeIdentifiers
 import WebKit
 
 // MARK: - Local content + font catalogue
@@ -160,22 +163,45 @@ final class LocalContent: NSObject, WKURLSchemeHandler {
     }
 }
 
+// MARK: - Title bar drag strip
+
+/// The page fills the window (hidden title bar), so this transparent strip along the
+/// top lets you drag the window — and double-click to zoom/minimise — like any Mac app.
+final class TitlebarDragView: NSView {
+    override var mouseDownCanMoveWindow: Bool { true }
+    override func mouseDown(with event: NSEvent) {
+        if event.clickCount == 2 {
+            let action = UserDefaults.standard.string(forKey: "AppleActionOnDoubleClick") ?? "Maximize"
+            if action == "Minimize" { window?.performMiniaturize(nil) } else if action != "None" { window?.performZoom(nil) }
+        } else {
+            window?.performDrag(with: event)
+        }
+    }
+}
+
 // MARK: - App delegate
 
-final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler, WKNavigationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKScriptMessageHandler, WKNavigationDelegate, WKUIDelegate {
     var window: NSWindow!
     var web: WKWebView!
     var content: LocalContent!
     private var pendingExports: [(Data, String)] = []
     private var saving = false
+    private var shown = false
+
+    static let titlebarHeight: CGFloat = 28
+    private static let lightBackground = NSColor(srgbRed: 0xf4 / 255, green: 0xf4 / 255, blue: 0xf4 / 255, alpha: 1)
+    private static let darkBackground = NSColor(srgbRed: 0x14 / 255, green: 0x14 / 255, blue: 0x14 / 255, alpha: 1)
 
     private static let bridgeScript = """
+    window.isMacApp = true;
     window.nativeFontCatalog = (fresh) => new Promise((resolve, reject) => {
       window.fontCatalogResolve = resolve;
       window.fontCatalogReject = reject;
       window.webkit.messageHandlers.loadFonts.postMessage(fresh ? "rescan" : "load");
     });
     window.nativeDownload = (data, name) => window.webkit.messageHandlers.saveExport.postMessage({ data, name });
+    window.nativeSetTheme = (dark) => window.webkit.messageHandlers.theme.postMessage(!!dark);
     """
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -184,43 +210,197 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let config = WKWebViewConfiguration()
         content = LocalContent(root: Bundle.main.resourceURL!.appendingPathComponent("web"))
         config.setURLSchemeHandler(content, forURLScheme: "typefolio")
-        config.userContentController.add(self, name: "saveExport")
-        config.userContentController.add(self, name: "loadFonts")
+        for name in ["saveExport", "loadFonts", "theme"] { config.userContentController.add(self, name: name) }
         config.userContentController.addUserScript(WKUserScript(source: Self.bridgeScript, injectionTime: .atDocumentStart, forMainFrameOnly: true))
 
         web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = self
+        web.uiDelegate = self
+        web.allowsMagnification = false
+        web.allowsBackForwardNavigationGestures = false
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1200, height: 850),
-                          styleMask: [.titled, .closable, .miniaturizable, .resizable],
+        // Hidden title bar: the page runs edge to edge, traffic lights float over it.
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1280, height: 860),
+                          styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                           backing: .buffered, defer: false)
         window.title = "Find My Type"
-        window.contentView = web
-        window.center()
-        window.makeKeyAndOrderFront(nil)
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = false
+        window.minSize = NSSize(width: 760, height: 560)
+        window.backgroundColor = Self.lightBackground
+        window.tabbingMode = .disallowed
+        window.delegate = self
+
+        let container = NSView()
+        container.autoresizesSubviews = true
+        web.autoresizingMask = [.width, .height]
+        container.addSubview(web)
+        let drag = TitlebarDragView()
+        drag.autoresizingMask = [.width, .minYMargin]
+        container.addSubview(drag)
+        window.contentView = container
+        web.frame = container.bounds
+        drag.frame = NSRect(x: 0, y: container.bounds.height - Self.titlebarHeight, width: container.bounds.width, height: Self.titlebarHeight)
+
+        // Remember size and position between launches; centre the first time.
+        if !window.setFrameUsingName("MainWindow") { window.center() }
+        window.setFrameAutosaveName("MainWindow")
 
         web.load(URLRequest(url: URL(string: "typefolio://app/")!))
+        // Show once the page has drawn (no white flash); fall back after 2s.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self.showWindow() }
+    }
+
+    private func showWindow() {
+        guard !shown else { return }
+        shown = true
+        window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func buildMenu() {
-        let menu = NSMenu()
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        // One more frame so the first paint (with the saved theme) is on screen.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { self.showWindow() }
+    }
 
-        let appItem = NSMenuItem()
-        let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Quit Find My Type", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        appItem.submenu = appMenu
-        menu.addItem(appItem)
-
-        let editItem = NSMenuItem()
-        let editMenu = NSMenu(title: "Edit")
-        for (title, action, key) in [("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a")] {
-            editMenu.addItem(withTitle: title, action: Selector(action), keyEquivalent: key)
+    /// Keep the app on its own page: never navigate away (e.g. a file dropped on the window).
+    /// http(s) links open in the default browser.
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        guard let url = action.request.url else { return decisionHandler(.cancel) }
+        if url.scheme == "typefolio" { return decisionHandler(.allow) }
+        if ["http", "https", "mailto"].contains(url.scheme ?? ""), action.navigationType == .linkActivated {
+            NSWorkspace.shared.open(url)
         }
-        editItem.submenu = editMenu
-        menu.addItem(editItem)
+        decisionHandler(.cancel)
+    }
 
-        NSApp.mainMenu = menu
+    /// <input type="file"> needs a native open panel inside WKWebView.
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+        let panel = fontOpenPanel(multiple: parameters.allowsMultipleSelection)
+        panel.beginSheetModal(for: window) { response in completionHandler(response == .OK ? panel.urls : nil) }
+    }
+
+    private func fontOpenPanel(multiple: Bool) -> NSOpenPanel {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = multiple
+        panel.canChooseDirectories = false
+        panel.allowedContentTypes = ["ttf", "otf", "woff", "woff2"].compactMap { UTType(filenameExtension: $0) }
+        panel.message = "Choose font files to preview in Find My Type"
+        panel.prompt = "Import"
+        return panel
+    }
+
+    // MARK: Menus
+
+    private func buildMenu() {
+        let main = NSMenu()
+
+        func submenu(_ title: String, _ items: [NSMenuItem]) -> NSMenu {
+            let menu = NSMenu(title: title)
+            items.forEach(menu.addItem)
+            let holder = NSMenuItem()
+            holder.submenu = menu
+            main.addItem(holder)
+            return menu
+        }
+        func item(_ title: String, _ action: Selector?, _ key: String = "", _ mods: NSEvent.ModifierFlags = .command, target: AnyObject? = nil) -> NSMenuItem {
+            let i = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            i.keyEquivalentModifierMask = mods
+            i.target = target
+            return i
+        }
+        func command(_ title: String, _ name: String, _ key: String = "", _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let i = item(title, #selector(sendCommand(_:)), key, mods, target: self)
+            i.representedObject = name
+            return i
+        }
+        let sep = { NSMenuItem.separator() }
+
+        _ = submenu("Find My Type", [
+            item("About Find My Type", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
+            sep(),
+            item("Hide Find My Type", #selector(NSApplication.hide(_:)), "h"),
+            item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
+            item("Show All", #selector(NSApplication.unhideAllApplications(_:))),
+            sep(),
+            item("Quit Find My Type", #selector(NSApplication.terminate(_:)), "q"),
+        ])
+
+        _ = submenu("File", [
+            item("Import Font Files…", #selector(importFonts(_:)), "o", target: self),
+            command("Rescan Installed Fonts", "rescan", "r"),
+            sep(),
+            command("Export Shortlist as PDF…", "export-pdf", "e"),
+            command("Export Shortlist as PNG…", "export-png", "e", [.command, .shift]),
+            sep(),
+            item("Close Window", #selector(NSWindow.performClose(_:)), "w"),
+        ])
+
+        _ = submenu("Edit", [
+            item("Undo", Selector(("undo:")), "z"),
+            item("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            sep(),
+            item("Cut", #selector(NSText.cut(_:)), "x"),
+            item("Copy", #selector(NSText.copy(_:)), "c"),
+            item("Paste", #selector(NSText.paste(_:)), "v"),
+            item("Select All", #selector(NSText.selectAll(_:)), "a"),
+            sep(),
+            command("Find Fonts…", "find", "f"),
+            command("Edit Company Name", "edit-name", "n"),
+        ])
+
+        _ = submenu("View", [
+            command("Google Fonts", "source-google", "1"),
+            command("Local Fonts", "source-local", "2"),
+            sep(),
+            command("Show Shortlist", "shortlist", "l"),
+            command("Grid", "view-grid", "1", [.command, .option]),
+            command("List", "view-list", "2", [.command, .option]),
+            command("Shuffle Fonts", "shuffle", "s", [.command, .option]),
+            sep(),
+            command("Larger Preview", "size-up", "="),
+            command("Smaller Preview", "size-down", "-"),
+            command("Default Preview Size", "size-reset", "0"),
+            sep(),
+            command("Toggle Dark Mode", "toggle-theme", "d", [.command, .shift]),
+            item("Enter Full Screen", #selector(NSWindow.toggleFullScreen(_:)), "f", [.command, .control]),
+        ])
+
+        let windowMenu = submenu("Window", [
+            item("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
+            item("Zoom", #selector(NSWindow.performZoom(_:))),
+            sep(),
+            item("Bring All to Front", #selector(NSApplication.arrangeInFront(_:))),
+        ])
+
+        NSApp.mainMenu = main
+        NSApp.windowsMenu = windowMenu
+    }
+
+    /// Menu item → window.appCommand(name) in the page.
+    @objc private func sendCommand(_ sender: NSMenuItem) {
+        guard let name = sender.representedObject as? String else { return }
+        web.evaluateJavaScript("window.appCommand && window.appCommand(\(jsString(name)))", completionHandler: nil)
+    }
+
+    /// File › Import: native open panel, then hand the bytes to the page.
+    @objc private func importFonts(_ sender: Any?) {
+        let panel = fontOpenPanel(multiple: true)
+        panel.beginSheetModal(for: window) { response in
+            guard response == .OK else { return }
+            let files: [[String: String]] = panel.urls.compactMap { url in
+                guard let data = try? Data(contentsOf: url) else { return nil }
+                return ["name": url.lastPathComponent, "data": data.base64EncodedString()]
+            }
+            guard let json = try? JSONSerialization.data(withJSONObject: files), let text = String(data: json, encoding: .utf8) else { return }
+            self.web.evaluateJavaScript("window.importFontData && window.importFontData(\(text))", completionHandler: nil)
+        }
+    }
+
+    private func jsString(_ value: String) -> String {
+        let data = try? JSONSerialization.data(withJSONObject: [value])
+        return String(data: data ?? Data(), encoding: .utf8).map { String($0.dropFirst().dropLast()) } ?? "\"\""
     }
 
     // MARK: JS → native messages
@@ -229,8 +409,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         switch message.name {
         case "loadFonts": sendFontCatalog(fresh: message.body as? String == "rescan")
         case "saveExport": queueExport(message.body)
+        case "theme": applyTheme(dark: message.body as? Bool ?? false)
         default: break
         }
+    }
+
+    /// Match the window chrome (traffic lights, scrollbars, save panels) to the in-app theme.
+    private func applyTheme(dark: Bool) {
+        window.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
+        window.backgroundColor = dark ? Self.darkBackground : Self.lightBackground
     }
 
     private func sendFontCatalog(fresh: Bool) {
@@ -263,13 +450,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
         let (data, name) = pendingExports.removeFirst()
         let panel = NSSavePanel()
         panel.nameFieldStringValue = name
+        panel.canCreateDirectories = true
         panel.beginSheetModal(for: window) { response in
             if response == .OK, let url = panel.url {
                 do { try data.write(to: url) } catch {
                     let alert = NSAlert()
-                    alert.messageText = "Could not save export"
+                    alert.messageText = "Couldn’t save the export"
                     alert.informativeText = error.localizedDescription
-                    alert.runModal()
+                    alert.beginSheetModal(for: self.window)
                 }
             }
             self.saving = false

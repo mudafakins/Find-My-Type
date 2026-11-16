@@ -78,6 +78,10 @@
   --control-h: 36px;
   --control-h-sm: 28px;
   --icon: 16px;
+
+  /* Layout */
+  --titlebar-h: 0px;                                  /* set in the Mac app (hidden title bar) */
+  --sticky-top: calc(var(--titlebar-h) + var(--space-3));
 }
 
 body.dark {
@@ -113,6 +117,33 @@ body.dark {
 /* ---------- 2. Base ---------- */
 *, *::before, *::after { box-sizing: border-box; }
 [hidden] { display: none !important; }
+
+/* ---- Mac app: hidden title bar + native feel ---- */
+body.mac-app { --titlebar-h: 28px; --sticky-top: calc(28px + var(--space-3)); }
+body.mac-app .main { padding-top: calc(var(--titlebar-h) + var(--space-3)); }
+body.mac-app .drawer { padding-top: var(--titlebar-h); }
+
+/* UI text isn't selectable (like native controls); typing fields still are. */
+body { -webkit-user-select: none; user-select: none; cursor: default; }
+input, textarea { -webkit-user-select: text; user-select: text; }
+
+/* Drop font files on the window to import them */
+body.dropping::after {
+  content: "Drop font files to import";
+  position: fixed;
+  inset: var(--space-3);
+  z-index: 3000;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--text-2);
+  border-radius: var(--radius-xl);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  opacity: .94;
+  pointer-events: none;
+}
 
 body {
   margin: 0;
@@ -184,7 +215,7 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
 /* Sticky header: stays in reach while you scroll the fonts, and condenses. */
 .app-header {
   position: sticky;
-  top: var(--space-3);
+  top: var(--sticky-top);
   z-index: 50;
   margin-bottom: var(--space-4);
 }
@@ -194,7 +225,7 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
   content: "";
   position: absolute;
   z-index: -1;
-  top: calc(-1 * var(--space-3));
+  top: calc(-1 * var(--sticky-top));
   bottom: 50%;
   left: 50%;
   width: 100vw;
@@ -1256,7 +1287,6 @@ button.busy:disabled { opacity: .8; }
   .meta-actions { width: 100%; justify-content: space-between; flex-wrap: wrap; }
   .grid { grid-template-columns: 1fr; }
   .sample { height: 230px; }
-  .app-header { top: var(--space-2); }
   .app-header.condensed .style-controls { display: none; }
   .options { opacity: 1; }
   .select select { max-width: 128px; }

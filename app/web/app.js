@@ -1300,7 +1300,7 @@ const drawer = (() => {
 
   onFavouritesChanged = sync;
   sync();
-  return { sync, open };
+  return { sync, open, close, toggle: () => (isOpen() ? close() : open()) };
 })();
 
 /* =========================================================================
@@ -1567,6 +1567,7 @@ el.theme.addEventListener('click', () => {
   const dark = document.body.classList.toggle('dark');
   const colours = CARD_COLOURS[dark ? 'dark' : 'light'];
   setCardColours(colours.ink, colours.paper);
+  window.nativeSetTheme?.(dark);
 });
 
 document.querySelectorAll('[data-source]').forEach((b) => b.addEventListener('click', () => setSource(b.dataset.source)));
@@ -1623,3 +1624,67 @@ if (Array.isArray(window.FONT_CATALOG)) {
 // Local fonts: reconnect automatically if the user agreed before; otherwise ask once.
 if (state.fontsConnected) connectLocalFonts({ silent: true });
 else if (!state.fontsPrompted) setTimeout(showConnectPrompt, 400);
+
+/* =========================================================================
+   Mac app integration: menu commands, File › Import, drag & drop, native feel
+   ========================================================================= */
+
+const DEFAULT_SIZE = 42;
+function setPreviewSize(px) {
+  el.size.value = Math.max(+el.size.min, Math.min(+el.size.max, px));
+  el.size.dispatchEvent(new Event('input'));
+}
+
+/** Called by the menu bar (native/FindMyType.swift). */
+window.appCommand = (command) => {
+  switch (command) {
+    case 'export-pdf': exportShortlist('pdf'); break;
+    case 'export-png': exportShortlist('png'); break;
+    case 'rescan': connectLocalFonts({ fresh: state.fontsConnected }); break;
+    case 'find': el.search.focus(); el.search.select(); break;
+    case 'edit-name': el.word.focus(); el.word.select(); break;
+    case 'source-google': setSource('google'); break;
+    case 'source-local': setSource('local'); break;
+    case 'shortlist': drawer.toggle(); break;
+    case 'view-grid': setView('grid'); break;
+    case 'view-list': setView('list'); break;
+    case 'shuffle': setSort('shuffle'); break;
+    case 'size-up': setPreviewSize(+el.size.value + 4); break;
+    case 'size-down': setPreviewSize(+el.size.value - 4); break;
+    case 'size-reset': setPreviewSize(DEFAULT_SIZE); break;
+    case 'toggle-theme': el.theme.click(); break;
+    default: break;
+  }
+};
+
+/** File › Import Font Files… hands us [{ name, data: base64 }]. */
+window.importFontData = (files) => importFontFiles(files.map(({ name, data }) => {
+  const bytes = Uint8Array.from(atob(data), (c) => c.charCodeAt(0));
+  return new File([bytes], name);
+}));
+
+// Drop font files anywhere on the window to import them.
+const FONT_FILE = /\.(ttf|otf|woff2?)$/i;
+document.addEventListener('dragover', (e) => {
+  if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+  document.body.classList.add('dropping');
+});
+document.addEventListener('dragleave', (e) => { if (!e.relatedTarget) document.body.classList.remove('dropping'); });
+document.addEventListener('drop', (e) => {
+  document.body.classList.remove('dropping');
+  if (!e.dataTransfer?.files.length) return;
+  e.preventDefault();
+  const fonts = [...e.dataTransfer.files].filter((f) => FONT_FILE.test(f.name));
+  if (fonts.length) importFontFiles(fonts);
+  else message('Drop .ttf, .otf, .woff or .woff2 files to preview them.', { tone: 'error' });
+});
+
+// Feel like a Mac app: no web context menu outside text fields.
+document.addEventListener('contextmenu', (e) => {
+  if (!e.target.closest('input, textarea')) e.preventDefault();
+});
+
+if (window.isMacApp) document.body.classList.add('mac-app');
+window.nativeSetTheme?.(document.body.classList.contains('dark'));
