@@ -9,16 +9,14 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <!-- Soft colour field behind everything, so the glass has something to refract -->
-  <div class="ambient" aria-hidden="true"></div>
   <!-- When this scrolls out of view the header condenses -->
   <div id="top-sentinel" aria-hidden="true"></div>
 
   <main class="main">
 
-    <!-- Wordmark input + global preview controls (sticky glass header) -->
+    <!-- Wordmark input + global preview controls (sticky header) -->
     <header class="app-header">
-    <section class="workspace glass" aria-label="Wordmark preview controls">
+    <section class="workspace panel" aria-label="Wordmark preview controls">
       <div class="name-row">
         <div class="name-field">
           <label class="label" for="word">TYPE COMPANY NAME</label>
@@ -45,7 +43,7 @@
           <span class="label">Card palette</span>
           <div class="palette-row">
             <!-- Replaced at runtime by the in-app colour picker (see app.js) -->
-            <label class="color-wrap"><input id="ink" type="color" value="#1b1a18">Text</label>
+            <label class="color-wrap"><input id="ink" type="color" value="#1a1a1a">Text</label>
             <label class="color-wrap"><input id="paper" type="color" value="#ffffff">Background</label>
           </div>
         </div>
@@ -54,7 +52,7 @@
     </header>
 
     <!-- Font library: source tabs, connect/import, search, category filters -->
-    <section class="library glass" aria-label="Font library">
+    <section class="library panel" aria-label="Font library">
     <div class="library-bar">
       <nav class="sources" aria-label="Font source">
         <div class="source-tabs">

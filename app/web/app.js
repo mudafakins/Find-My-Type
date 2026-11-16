@@ -28,8 +28,8 @@ const FEATURED = ['DM Sans', 'Playfair Display', 'Space Grotesk', 'Bodoni Moda',
 const svg = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
 // Default card colours for each theme (applied when the theme changes).
 const CARD_COLOURS = {
-  light: { ink: '#1b1a18', paper: '#ffffff' },
-  dark: { ink: '#f2f0ed', paper: '#232120' },
+  light: { ink: '#1a1a1a', paper: '#ffffff' },
+  dark: { ink: '#f0f0f0', paper: '#242424' },
 };
 
 const ICONS = {
@@ -295,12 +295,12 @@ function setSource(source) {
 }
 
 /* =========================================================================
-   Glass shell: sliding tab indicator, condensing header, reduce transparency
+   Shell: sliding tab indicator, condensing header
    ========================================================================= */
 
 const tabIndicator = $('.tab-indicator');
 
-/** Slide the glass lens under the active source tab. */
+/** Slide the indicator under the active source tab. */
 function moveTabIndicator() {
   const active = $('.source-tabs button.active');
   if (!active || !tabIndicator) return;
@@ -312,10 +312,6 @@ function moveTabIndicator() {
 new IntersectionObserver(([entry]) => {
   $('.app-header').classList.toggle('condensed', !entry.isIntersecting);
 }).observe($('#top-sentinel'));
-
-/** The Mac app calls this with the system "Reduce transparency" setting. */
-window.setReduceTransparency = (on) => document.body.classList.toggle('reduce-transparency', !!on);
-if (window.__reduceTransparency) window.setReduceTransparency(true);
 
 /* =========================================================================
    Grid rendering
@@ -653,7 +649,7 @@ async function renderSheet(group, { name, bg, ink, size }) {
   const canvas = h('canvas', { width: width * scale, height: height * scale });
   const ctx = canvas.getContext('2d');
   ctx.scale(scale, scale);
-  ctx.fillStyle = isDark() ? '#141312' : '#f5f4f1';
+  ctx.fillStyle = isDark() ? '#141414' : '#f4f4f4';
   ctx.fillRect(0, 0, width, height);
 
   group.forEach((f, i) => {

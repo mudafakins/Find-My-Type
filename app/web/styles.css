@@ -1,32 +1,35 @@
 /* =========================================================================
    Find My Type — styles
-   Phase 2: design system. Phase 3: Liquid Glass shell. Every colour, size, radius, shadow and timing
-   comes from the tokens below; components never hard-code values.
+   Simple grayscale, solid colours. Every colour, size, radius, shadow and
+   timing comes from the tokens below; components never hard-code values.
    ========================================================================= */
 
 /* ---------- 1. Tokens ---------- */
 :root {
   color-scheme: light;
 
-  /* Colour — warm paper & ink, with one vermilion "proof mark" accent */
-  --bg:             #f5f4f1;
-  --surface:        #fcfbf9;
-  --surface-raised: #ffffff;
-  --surface-sunken: #ecebe7;
-  --text:           #1b1a18;
-  --text-2:         #57534e;
-  --text-3:         #736e68;
-  --border:         #e4e1dc;
-  --border-strong:  #cfcac3;
-  --hover:          rgb(27 26 24 / .05);
-  --press:          rgb(27 26 24 / .09);
-  --primary:        #1b1a18;  /* main action button */
+  /* Colour — neutral grayscale, solid fills only */
+  --bg:             #f4f4f4;
+  --surface:        #fafafa;  /* panels */
+  --surface-raised: #ffffff;  /* tab indicator, popovers */
+  --surface-sunken: #ececec;
+  --well:           #efefef;  /* recessed areas inside panels (inputs, tab track) */
+  --well-hover:     #e8e8e8;
+  --divider:        #ebebeb;  /* lines inside panels */
+  --text:           #1a1a1a;
+  --text-2:         #555555;
+  --text-3:         #6e6e6e;
+  --border:         #e2e2e2;
+  --border-strong:  #cccccc;
+  --hover:          #ededed;
+  --press:          #e4e4e4;
+  --primary:        #1a1a1a;  /* main action button, active chips */
   --on-primary:     #ffffff;
-  --accent:         #e5482d;
-  --accent-text:    #c2361d;  /* accent used as text: AA on light surfaces */
-  --accent-soft:    rgb(229 72 45 / .1);
+  --accent:         #1a1a1a;  /* favourites, sliders, toggles — monochrome */
+  --accent-text:    #1a1a1a;
+  --accent-soft:    #e6e6e6;
   --on-accent:      #ffffff;
-  --focus-ring:     rgb(229 72 45 / .55);
+  --focus-ring:     #8a8a8a;
 
   /* Type — 11px is the smallest size anywhere in the UI */
   --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", system-ui, sans-serif;
@@ -60,9 +63,9 @@
   --radius-pill: 999px;
 
   /* Elevation */
-  --shadow-sm: 0 1px 2px rgb(27 26 24 / .06);
-  --shadow-md: 0 1px 2px rgb(27 26 24 / .04), 0 6px 20px rgb(27 26 24 / .06);
-  --shadow-lg: 0 2px 6px rgb(27 26 24 / .06), 0 18px 48px rgb(27 26 24 / .14);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / .06);
+  --shadow-md: 0 1px 2px rgb(0 0 0 / .04), 0 6px 20px rgb(0 0 0 / .06);
+  --shadow-lg: 0 2px 6px rgb(0 0 0 / .06), 0 18px 48px rgb(0 0 0 / .14);
 
   /* Motion */
   --ease-out: cubic-bezier(.2, .8, .2, 1);
@@ -75,65 +78,36 @@
   --control-h: 36px;
   --control-h-sm: 28px;
   --icon: 16px;
-
-  /* Glass material (Liquid Glass–style translucent panels) */
-  --glass-bg:        rgb(252 251 249 / .56);
-  --glass-bg-strong: rgb(252 251 249 / .8);
-  --glass-blur:      28px;
-  --glass-saturate:  180%;
-  --glass-border:    rgb(255 255 255 / .6);
-  --glass-edge:      rgb(27 26 24 / .08);  /* hairline outside the panel */
-  --glass-highlight: rgb(255 255 255 / .95); /* top inner light */
-  --glass-rim:       rgb(255 255 255 / .9);  /* specular rim */
-  --glass-well:      rgb(27 26 24 / .05);  /* recessed areas inside glass */
-  --glass-divider:   rgb(27 26 24 / .07);
-  --glass-shadow:    0 1px 1px rgb(27 26 24 / .03), 0 10px 36px rgb(27 26 24 / .08);
-
-  /* Ambient colour field */
-  --ambient-1: rgb(255 140 100 / .5);
-  --ambient-2: rgb(255 205 130 / .55);
-  --ambient-3: rgb(150 165 255 / .35);
 }
 
 body.dark {
   color-scheme: dark;
 
-  --bg:             #141312;
-  --surface:        #1b1a19;
-  --surface-raised: #232120;
-  --surface-sunken: #0e0d0c;
-  --text:           #f2f0ed;
-  --text-2:         #b8b3ac;
-  --text-3:         #938e87;
-  --border:         #2d2b29;
-  --border-strong:  #423f3b;
-  --hover:          rgb(255 255 255 / .06);
-  --press:          rgb(255 255 255 / .1);
-  --primary:        #f2f0ed;
-  --on-primary:     #141312;
-  --accent:         #ff6a4d;
-  --accent-text:    #ff8a73;
-  --accent-soft:    rgb(255 106 77 / .14);
-  --on-accent:      #141312;
-  --focus-ring:     rgb(255 106 77 / .6);
+  --bg:             #141414;
+  --surface:        #1c1c1c;
+  --surface-raised: #2a2a2a;
+  --surface-sunken: #0e0e0e;
+  --well:           #242424;
+  --well-hover:     #2c2c2c;
+  --divider:        #262626;
+  --text:           #f0f0f0;
+  --text-2:         #b5b5b5;
+  --text-3:         #8f8f8f;
+  --border:         #2e2e2e;
+  --border-strong:  #424242;
+  --hover:          #262626;
+  --press:          #2e2e2e;
+  --primary:        #f0f0f0;
+  --on-primary:     #141414;
+  --accent:         #f0f0f0;
+  --accent-text:    #f0f0f0;
+  --accent-soft:    #333333;
+  --on-accent:      #141414;
+  --focus-ring:     #9a9a9a;
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / .4);
   --shadow-md: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .35);
   --shadow-lg: 0 2px 6px rgb(0 0 0 / .35), 0 18px 48px rgb(0 0 0 / .5);
-
-  --glass-bg:        rgb(34 32 30 / .52);
-  --glass-bg-strong: rgb(34 32 30 / .82);
-  --glass-border:    rgb(255 255 255 / .08);
-  --glass-edge:      rgb(0 0 0 / .5);
-  --glass-highlight: rgb(255 255 255 / .1);
-  --glass-rim:       rgb(255 255 255 / .22);
-  --glass-well:      rgb(255 255 255 / .05);
-  --glass-divider:   rgb(255 255 255 / .07);
-  --glass-shadow:    0 1px 1px rgb(0 0 0 / .3), 0 14px 44px rgb(0 0 0 / .45);
-
-  --ambient-1: rgb(255 106 77 / .26);
-  --ambient-2: rgb(255 170 90 / .14);
-  --ambient-3: rgb(110 120 255 / .2);
 }
 
 /* ---------- 2. Base ---------- */
@@ -192,50 +166,16 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
   padding: var(--space-8) var(--space-8) var(--space-6);
 }
 
-/* ---------- 2b. Liquid Glass ---------- */
-
-/* Soft colour field behind the page; gives the glass something to refract. */
-.ambient {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  pointer-events: none;
-  background:
-    radial-gradient(42% 46% at 12% 10%, var(--ambient-1), transparent 72%),
-    radial-gradient(38% 42% at 88% 14%, var(--ambient-2), transparent 72%),
-    radial-gradient(50% 50% at 70% 92%, var(--ambient-3), transparent 72%);
-  filter: blur(24px);
-  transition: opacity var(--dur-slow) var(--ease-out);
-}
-
+/* ---------- 2b. Panels ---------- */
 #top-sentinel { position: absolute; top: 0; left: 0; width: 1px; height: 72px; pointer-events: none; }
 
-/* The material: translucent fill + blur + saturation, a bright top edge,
-   a soft drop shadow, and a specular rim that catches light on the corners. */
-.glass {
+/* Solid panel used for the header and the library bar. */
+.panel {
   position: relative;
-  background: var(--glass-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  border: 1px solid var(--glass-border);
-  box-shadow:
-    0 0 0 .5px var(--glass-edge),
-    inset 0 1px 0 var(--glass-highlight),
-    var(--glass-shadow);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   transition: background-color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
-}
-.glass::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(135deg, var(--glass-rim), transparent 32%, transparent 68%, var(--glass-rim));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-  opacity: .7;
-  pointer-events: none;
 }
 
 /* ---------- 3. Workspace (name + controls) ---------- */
@@ -248,9 +188,23 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
   margin-bottom: var(--space-4);
 }
 
+/* Solid strip behind the stuck header so cards don't peek through the gap above it */
+.app-header::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: calc(-1 * var(--space-3));
+  bottom: 50%;
+  left: 50%;
+  width: 100vw;
+  transform: translateX(-50%);
+  background: var(--bg);
+  pointer-events: none;
+}
+
 .workspace { border-radius: var(--radius-xl); }
 
-.app-header.condensed .workspace { background: var(--glass-bg-strong); }
+.app-header.condensed .workspace { box-shadow: var(--shadow-md); }
 
 .name-row {
   display: flex;
@@ -311,10 +265,10 @@ input[type=range] { accent-color: var(--accent); cursor: pointer; }
   width: var(--control-h);
   height: var(--control-h);
   padding: 0;
-  background: var(--glass-well);
+  background: var(--well);
   border-color: transparent;
 }
-#theme:hover { background: var(--press); }
+#theme:hover { background: var(--well-hover); }
 /* Show a moon in light mode, a sun in dark mode */
 #theme .icon-sun { display: none; }
 body.dark #theme .icon-sun { display: block; }
@@ -325,7 +279,7 @@ body.dark #theme .icon-moon { display: none; }
   align-items: center;
   gap: var(--space-6);
   padding: var(--space-3) var(--space-6);
-  border-top: 1px solid var(--glass-divider);
+  border-top: 1px solid var(--divider);
   transition: padding var(--dur-slow) var(--ease-out);
 }
 
@@ -351,7 +305,7 @@ body.dark #theme .icon-moon { display: none; }
   min-width: 28px;
   padding: 2px var(--space-1);
   margin-left: var(--space-2);
-  background: var(--glass-well);
+  background: var(--well);
   border-radius: var(--radius-xs);
   color: var(--text);
   text-align: center;
@@ -365,7 +319,7 @@ body.dark #theme .icon-moon { display: none; }
   align-items: center;
   gap: var(--space-4);
   padding-left: var(--space-6);
-  border-left: 1px solid var(--glass-divider);
+  border-left: 1px solid var(--divider);
 }
 .palette-row { display: flex; align-items: center; gap: var(--space-4); }
 .color-wrap { display: inline-flex; align-items: center; gap: var(--space-2); }
@@ -407,13 +361,13 @@ body.dark #theme .icon-moon { display: none; }
 }
 .sources { display: flex; align-items: center; gap: var(--space-1); flex-wrap: wrap; }
 
-/* Segmented control with a sliding glass "lens" behind the active tab */
+/* Segmented control with a sliding indicator behind the active tab */
 .source-tabs {
   position: relative;
   display: flex;
   padding: 3px;
   margin-right: var(--space-3);
-  background: var(--glass-well);
+  background: var(--well);
   border-radius: var(--radius-md);
 }
 .source-tabs button {
@@ -437,7 +391,7 @@ body.dark #theme .icon-moon { display: none; }
   width: 0;
   border-radius: calc(var(--radius-md) - 3px);
   background: var(--surface-raised);
-  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--glass-highlight);
+  box-shadow: var(--shadow-sm);
 }
 .tab-indicator.ready {
   transition: transform var(--dur-slow) var(--ease-spring), width var(--dur-slow) var(--ease-spring);
@@ -457,7 +411,7 @@ body.dark #theme .icon-moon { display: none; }
   width: 100%;
   height: var(--control-h);
   padding: 0 var(--space-3) 0 36px;
-  background: var(--glass-well);
+  background: var(--well);
   color: var(--text);
   border: 1px solid transparent;
   border-radius: var(--radius-md);
@@ -465,7 +419,7 @@ body.dark #theme .icon-moon { display: none; }
               background-color var(--dur-fast) var(--ease-out);
 }
 .search::placeholder { color: var(--text-3); }
-.search:hover { background: var(--press); }
+.search:hover { background: var(--well-hover); }
 .search:focus-visible {
   outline: none;
   background: var(--surface-raised);
@@ -475,7 +429,7 @@ body.dark #theme .icon-moon { display: none; }
 
 /* ---------- 5. Filters, count, sorting ---------- */
 .toolbar {
-  border-top: 1px solid var(--glass-divider);
+  border-top: 1px solid var(--divider);
   padding-top: var(--space-3);
 }
 .filters { display: flex; gap: var(--space-1); flex-wrap: wrap; }
@@ -679,12 +633,11 @@ body.dark #theme .icon-moon { display: none; }
   position: fixed;
   z-index: 1000;
   padding: var(--space-4);
-  background: var(--glass-bg-strong);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-  backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+  background: var(--surface-raised);
   color: var(--text);
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  box-shadow: 0 0 0 .5px var(--glass-edge), inset 0 1px 0 var(--glass-highlight), var(--shadow-lg);
+  box-shadow: var(--shadow-lg);
   animation: pop-in var(--dur) var(--ease-out);
 }
 .colour-popover[hidden] { display: none; }
@@ -721,8 +674,8 @@ body.dark #theme .icon-moon { display: none; }
   width: 140px;
   height: var(--control-h-sm);
   padding: 0 var(--space-2);
-  background: var(--glass-well);
-  border: 1px solid var(--glass-divider);
+  background: var(--well);
+  border: 1px solid var(--divider);
   border-radius: var(--radius-sm);
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-size: var(--text-sm);
@@ -789,20 +742,4 @@ body.dark #theme .icon-moon { display: none; }
     animation: none !important;
     transition: none !important;
   }
-}
-
-/* ---------- 9. Reduced transparency / no backdrop-filter ----------
-   Glass becomes solid surfaces. Triggered by the OS setting (browser media
-   query, or the Mac app sets body.reduce-transparency), or missing support. */
-@media (prefers-reduced-transparency: reduce) {
-  .glass, .colour-popover { background: var(--surface-raised); -webkit-backdrop-filter: none; backdrop-filter: none; }
-  .glass::before, .ambient { display: none; }
-}
-body.reduce-transparency .glass,
-body.reduce-transparency .colour-popover { background: var(--surface-raised); -webkit-backdrop-filter: none; backdrop-filter: none; }
-body.reduce-transparency .glass::before,
-body.reduce-transparency .ambient { display: none; }
-
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .glass, .colour-popover { background: var(--surface-raised); }
 }
