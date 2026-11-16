@@ -27,10 +27,63 @@ final class LocalContent: NSObject, WKURLSchemeHandler {
 
     init(root: URL) { self.root = root }
 
-    /// JSON array of installed font faces. Cached after the first (slow) scan.
-    func fontCatalog() throws -> Data {
-        if let catalog { return catalog }
+    /// Saved font list, so later launches don't wait for system_profiler (can take a minute).
+    private lazy var cacheURL: URL = {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "FindMyType", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("font-catalog.json")
+    }()
 
+    /// JSON array of installed font faces.
+    /// - fresh == false: memory → saved list on disk (then refresh it in the background) → full scan.
+    /// - fresh == true:  always scan again (the Rescan button).
+    func fontCatalog(fresh: Bool = false) throws -> Data {
+        if !fresh, let catalog { return catalog }
+        if !fresh, let data = try? Data(contentsOf: cacheURL),
+           let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]], !raw.isEmpty {
+            let result = try register(raw)
+            queue.asyncAfter(deadline: .now() + 2) { [weak self] in self?.refreshCache() }
+            return result
+        }
+        let raw = try scanInstalledFonts()
+        saveCache(raw)
+        return try register(raw)
+    }
+
+    /// Give every font file a token URL the web view can load, and remember the result.
+    private func register(_ raw: [[String: Any]]) throws -> Data {
+        files = [:]
+        var tokens: [String: String] = [:]
+        var faces: [[String: Any]] = []
+        for var face in raw {
+            guard let path = face["path"] as? String, FileManager.default.fileExists(atPath: path) else { continue }
+            let key = tokens[path] ?? {
+                let k = String(files.count)
+                tokens[path] = k
+                files[k] = URL(fileURLWithPath: path)
+                return k
+            }()
+            face["file"] = "typefolio://app/api/font/" + key
+            face.removeValue(forKey: "path")
+            faces.append(face)
+        }
+        let result = try JSONSerialization.data(withJSONObject: faces)
+        catalog = result
+        return result
+    }
+
+    private func saveCache(_ raw: [[String: Any]]) {
+        if let data = try? JSONSerialization.data(withJSONObject: raw) { try? data.write(to: cacheURL, options: .atomic) }
+    }
+
+    /// Quietly rescan so the next launch picks up newly installed fonts.
+    private func refreshCache() {
+        if let raw = try? scanInstalledFonts() { saveCache(raw) }
+    }
+
+    /// Ask macOS for every installed, enabled font face.
+    private func scanInstalledFonts() throws -> [[String: Any]] {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
         process.arguments = ["SPFontsDataType", "-json"]
@@ -54,9 +107,7 @@ final class LocalContent: NSObject, WKURLSchemeHandler {
                   let typefaces = entry["typefaces"] as? [[String: Any]]
             else { continue }
 
-            let key = String(files.count)
             let url = URL(fileURLWithPath: path)
-            files[key] = url
             let created = (try? FileManager.default.attributesOfItem(atPath: path)[.creationDate]) as? Date
 
             for face in typefaces {
@@ -69,15 +120,13 @@ final class LocalContent: NSObject, WKURLSchemeHandler {
                     "style": face["style"] as? String ?? "Regular",
                     "fullName": face["fullname"] as? String ?? family,
                     "postscriptName": face["_name"] as? String ?? "",
-                    "file": "typefolio://app/api/font/" + key,
+                    "path": path,
                     "extension": "." + url.pathExtension.lowercased(),
                     "installedAt": (created?.timeIntervalSince1970 ?? 0) * 1000,
                 ])
             }
         }
-        let result = try JSONSerialization.data(withJSONObject: faces)
-        catalog = result
-        return result
+        return faces
     }
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
@@ -124,10 +173,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
     private var saving = false
 
     private static let bridgeScript = """
-    window.nativeFontCatalog = () => new Promise((resolve, reject) => {
+    window.nativeFontCatalog = (fresh) => new Promise((resolve, reject) => {
       window.fontCatalogResolve = resolve;
       window.fontCatalogReject = reject;
-      window.webkit.messageHandlers.loadFonts.postMessage("load");
+      window.webkit.messageHandlers.loadFonts.postMessage(fresh ? "rescan" : "load");
     });
     window.nativeDownload = (data, name) => window.webkit.messageHandlers.saveExport.postMessage({ data, name });
     """
@@ -181,16 +230,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKScriptMessageHandler
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
         switch message.name {
-        case "loadFonts": sendFontCatalog()
+        case "loadFonts": sendFontCatalog(fresh: message.body as? String == "rescan")
         case "saveExport": queueExport(message.body)
         default: break
         }
     }
 
-    private func sendFontCatalog() {
+    private func sendFontCatalog(fresh: Bool) {
         content.queue.async {
             let script: String
-            if let data = try? self.content.fontCatalog(), let json = String(data: data, encoding: .utf8) {
+            if let data = try? self.content.fontCatalog(fresh: fresh), let json = String(data: data, encoding: .utf8) {
                 script = "window.fontCatalogResolve(" + json + ")"
             } else {
                 script = "window.fontCatalogReject(new Error('Could not read fonts'))"

@@ -76,17 +76,90 @@ const el = {
   count: $('#count'),
   grid: $('#grid'),
   sentinel: $('#sentinel'),
-  status: $('#status'),
   exportButton: $('#export'),
   theme: $('#theme'),
-  connect: $('#connect'),
+  rescan: $('#rescan'),
   import: $('#import'),
   files: $('#files'),
   clearFavourites: $('#clear-favourites'),
   clearSearch: $('#clear-search'),
 };
 
-const message = (text) => { el.status.textContent = text; };
+/* =========================================================================
+   Toasts — short messages at the bottom of the window
+   ========================================================================= */
+
+/**
+ * message(text, options) shows a toast and returns a handle { update(text), dismiss() }.
+ * options:
+ *   tone      'info' | 'success' | 'error' | 'progress'  (icon; progress = spinner, stays open)
+ *   action    { label, onClick }  optional button, e.g. Undo
+ *   duration  ms before auto-dismiss (0 = stay until dismissed)
+ *   id        reuse/replace a toast with the same id (e.g. 'export')
+ */
+const message = (() => {
+  const region = h('div', { className: 'toasts', role: 'status', 'aria-live': 'polite' });
+  document.body.append(region);
+  const byId = new Map();
+  const TONE_ICONS = {
+    success: '<path d="M5 12.5 10 17 19 7.5"/>',
+    error: '<circle cx="12" cy="12" r="8.5"/><path d="M12 8v4.5M12 16h.01"/>',
+    info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5M12 8h.01"/>',
+  };
+  const MAX = 3;
+
+  return function show(text, { tone = 'info', action, duration, id } = {}) {
+    if (id && byId.has(id)) byId.get(id).dismiss(true);
+    const icon = h('span', { className: 'toast-icon', 'aria-hidden': 'true' });
+    icon.innerHTML = tone === 'progress' ? '<span class="spinner"></span>' : svg(TONE_ICONS[tone] || TONE_ICONS.info);
+    const label = h('span', { className: 'toast-text', textContent: text });
+    const node = h('div', { className: `toast toast-${tone}` }, icon, label);
+
+    let timer = null;
+    const handle = {
+      update(next) { label.textContent = next; },
+      dismiss(instant = false) {
+        clearTimeout(timer);
+        if (id && byId.get(id) === handle) byId.delete(id);
+        if (instant) { node.remove(); return; }
+        node.classList.add('leaving');
+        node.addEventListener('animationend', () => node.remove(), { once: true });
+        setTimeout(() => node.remove(), 400); // fallback when animations are off
+      },
+    };
+
+    if (action) {
+      node.append(h('button', {
+        className: 'toast-action', type: 'button', textContent: action.label,
+        onClick: () => { handle.dismiss(); action.onClick(); },
+      }));
+    }
+    node.append(h('button', {
+      className: 'toast-close', type: 'button', 'aria-label': 'Dismiss', innerHTML: svg('<path d="M7 7l10 10M17 7 7 17"/>'),
+      onClick: () => handle.dismiss(),
+    }));
+
+    const ms = duration ?? (tone === 'progress' ? 0 : action ? 6000 : tone === 'error' ? 7000 : 4000);
+    const arm = () => { if (ms) timer = setTimeout(() => handle.dismiss(), ms); };
+    node.addEventListener('pointerenter', () => clearTimeout(timer)); // pause while hovered
+    node.addEventListener('pointerleave', arm);
+    arm();
+
+    if (id) byId.set(id, handle);
+    region.append(node);
+    while (region.children.length > MAX) region.firstElementChild.remove();
+    return handle;
+  };
+})();
+
+/** Put a button into a busy state (spinner + label). Returns a function that restores it. */
+function setBusy(button, label) {
+  const original = button.innerHTML;
+  button.disabled = true;
+  button.classList.add('busy');
+  button.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>${label}</span>`;
+  return () => { button.disabled = false; button.classList.remove('busy'); button.innerHTML = original; };
+}
 
 /* =========================================================================
    State + persistence
@@ -104,6 +177,9 @@ const state = {
   source: 'local',                 // 'google' | 'local'
   filter: ALL,
   view: saved.view === 'list' ? 'list' : 'grid', // 'grid' | 'list'
+  fontsConnected: !!saved.fontsConnected, // user agreed once → reconnect automatically at launch
+  fontsPrompted: !!saved.fontsPrompted,   // first-launch prompt already answered
+  localStatus: 'idle',                    // 'idle' | 'loading' | 'ready'
   sort: 'suggested',               // 'suggested' | 'shuffle' | 'newest'
   randomOrder: null,               // Map<fontId, rank> while shuffled
   googleFonts: [],
@@ -123,6 +199,8 @@ function persist() {
       size: el.size.value,
       dark: document.body.classList.contains('dark'),
       view: state.view,
+      fontsConnected: state.fontsConnected,
+      fontsPrompted: state.fontsPrompted,
     }));
   } catch { /* storage full or unavailable — non-fatal */ }
 }
@@ -423,15 +501,52 @@ function render() {
   el.grid.replaceChildren();
   state.page = 0;
 
-  if (!state.visible.length) {
-    el.grid.append(h('div', {
-      className: 'empty',
-      textContent: state.source === 'local' && !state.localFonts.length
-        ? 'Connect your installed fonts, or import font files to get started.'
-        : 'No fonts match. Try another filter or search.',
-    }));
-  }
+  if (!state.visible.length) el.grid.append(emptyState(query));
   appendPage();
+}
+
+const EMPTY_ICONS = {
+  connect: '<path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0V8Zm6 9v4"/>',
+  heart: '<path d="M12 20s-7.5-4.6-9.2-9.1C1.7 7.8 3.6 4.5 7 4.5c2 0 3.6 1.1 5 3 1.4-1.9 3-3 5-3 3.4 0 5.3 3.3 4.2 6.4C19.5 15.4 12 20 12 20Z"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/>',
+};
+
+/** Build the empty-grid message for the current situation. */
+function emptyState(query) {
+  const view = (icon, title, body, actions) => h('div', { className: 'empty' },
+    h('div', { className: 'empty-icon', innerHTML: svg(EMPTY_ICONS[icon]) }),
+    h('h2', { className: 'empty-title', textContent: title }),
+    h('p', { className: 'empty-body', textContent: body }),
+    h('div', { className: 'empty-actions' }, ...actions.map(({ label, primary, onClick }) =>
+      h('button', { type: 'button', className: primary ? 'btn-primary' : 'btn-secondary', textContent: label, onClick }))),
+  );
+
+  if (state.source === 'local' && state.localStatus === 'loading' && !state.localFonts.length) {
+    const loading = view('connect', 'Loading your fonts…', 'Reading the fonts installed on this computer. The first scan can take a minute.', []);
+    loading.querySelector('.empty-icon').innerHTML = '<span class="spinner spinner-lg"></span>';
+    return loading;
+  }
+  if (state.source === 'local' && !state.localFonts.length) {
+    return view('connect', 'Connect your fonts',
+      'See your company name in every font installed on this Mac. Fonts are read locally and never leave your computer. The first scan can take a minute.',
+      [
+        { label: 'Connect installed fonts', primary: true, onClick: (e) => connectLocalFonts({ trigger: e.currentTarget }) },
+        { label: 'Import font files', onClick: () => el.files.click() },
+        { label: 'Browse Google Fonts', onClick: () => setSource('google') },
+      ]);
+  }
+  if (state.filter === FAVOURITES && !query) {
+    return view('heart', 'No favourites yet',
+      'Tap the heart on any font to add it to your shortlist. Export the shortlist as PNG sheets when you’re ready.',
+      [{ label: 'Browse all fonts', primary: true, onClick: () => { state.filter = ALL; render(); } }]);
+  }
+  const actions = [];
+  if (query) actions.push({ label: 'Clear search', primary: true, onClick: () => { clearSearch(); el.search.focus(); } });
+  if (state.filter !== ALL) actions.push({ label: 'Show all categories', primary: !query, onClick: () => { state.filter = ALL; render(); } });
+  return view('search',
+    query ? `No fonts match “${el.search.value.trim()}”` : `No ${state.filter.toLowerCase()} fonts here`,
+    query ? 'Check the spelling, or search across all categories and sources.' : 'Try another category, or switch between Google and local fonts.',
+    actions);
 }
 
 function appendPage() {
@@ -468,9 +583,18 @@ function createCard(f) {
     heart.title = on ? 'Remove from favourites' : 'Add to favourites';
   };
   heart.addEventListener('click', () => {
-    if (state.favorites.has(key)) state.favorites.delete(key); else state.favorites.add(key);
+    const removing = state.favorites.has(key);
+    if (removing) state.favorites.delete(key); else state.favorites.add(key);
     persist();
-    if (state.filter === FAVOURITES) render(); else syncHeart();
+    if (state.filter === FAVOURITES) {
+      render(); // the card disappears, so offer a way back
+      if (removing) {
+        message(`Removed ${f.family} from favourites.`, {
+          id: 'favourites',
+          action: { label: 'Undo', onClick: () => { state.favorites.add(key); persist(); render(); } },
+        });
+      }
+    } else syncHeart();
     heart.classList.toggle('pop', state.favorites.has(key)); // animate only on click
   });
   syncHeart();
@@ -584,81 +708,148 @@ const refreshAllCards = () => document.querySelectorAll('.card').forEach(updateC
    Local fonts: connect + import
    ========================================================================= */
 
-/** Chrome/Edge: Local Font Access API. Everything else: Mac app or serve.py. */
-async function connectLocalFonts() {
-  if (!window.queryLocalFonts) return connectMacFonts();
-  try {
-    const data = await window.queryLocalFonts();
-    const map = new Map();
-    for (const font of data) {
-      if (!map.has(font.family)) {
-        map.set(font.family, { family: font.family, category: inferCategory(font.family), source: 'local', weights: [], variable: false });
-      }
-      const f = map.get(font.family);
-      const w = weightFromStyle(font.style);
-      if (!f.weights.includes(w)) f.weights.push(w);
+/** Chrome/Edge: Local Font Access API → family list (system fonts, no aliases needed). */
+async function readBrowserFonts() {
+  const map = new Map();
+  for (const font of await window.queryLocalFonts()) {
+    if (!map.has(font.family)) {
+      map.set(font.family, { family: font.family, category: inferCategory(font.family), source: 'local', weights: [], variable: false });
     }
-    state.localFonts = sortFamilies(map);
-    setSource('local');
-    message(`Connected ${state.localFonts.length} installed families. Local categories are estimated from font names.`);
-  } catch {
-    message('Font access was not granted. Try again or import font files.');
+    const f = map.get(font.family);
+    const w = weightFromStyle(font.style);
+    if (!f.weights.includes(w)) f.weights.push(w);
   }
+  return sortFamilies(map);
 }
 
-async function fetchMacFaces() {
-  if (window.nativeFontCatalog) return window.nativeFontCatalog();
-  const response = await fetch('/api/local-fonts');
-  if (!response.ok) throw new Error('Font service unavailable');
-  return response.json();
-}
+/** Mac app or serve.py → face list; registers each face under a private alias. */
+async function readMacFonts(fresh) {
+  let faces;
+  if (window.nativeFontCatalog) {
+    faces = await window.nativeFontCatalog(fresh);
+  } else {
+    const response = await fetch('/api/local-fonts');
+    if (!response.ok) throw new Error('Font service unavailable');
+    faces = await response.json();
+  }
 
-/** Read installed Mac fonts and register each face under a private alias. */
-async function connectMacFonts() {
-  el.connect.disabled = true;
-  message('Reading installed Mac fonts… This can take a minute on the first connection.');
-  try {
-    const faces = await fetchMacFaces();
-    const map = new Map();
-    const rules = [];
-
-    for (const face of faces) {
-      if (!map.has(face.family)) {
-        map.set(face.family, {
-          family: face.family,
-          alias: 'MacLocal' + map.size,
-          category: inferCategory(face.family),
-          source: 'local',
-          weights: [],
-          variable: false,
-          installedAt: face.installedAt || 0,
-        });
-      }
-      const f = map.get(face.family);
-      f.installedAt = Math.max(f.installedAt || 0, face.installedAt || 0);
-      const weight = weightFromStyle(face.style);
-      if (!f.weights.includes(weight)) f.weights.push(weight);
-
-      const italic = /italic|oblique/i.test(face.style);
-      const sources = [`local(${JSON.stringify(face.postscriptName)})`, `local(${JSON.stringify(face.fullName)})`];
-      if (['.ttf', '.otf', '.woff', '.woff2'].includes(face.extension)) sources.push(`url(${JSON.stringify(face.file)})`);
-      rules.push(`@font-face{font-family:${JSON.stringify(f.alias)};src:${sources.join(',')};font-weight:${weight};font-style:${italic ? 'italic' : 'normal'};font-display:swap;}`);
+  const map = new Map();
+  const rules = [];
+  for (const face of faces) {
+    if (!map.has(face.family)) {
+      map.set(face.family, {
+        family: face.family,
+        alias: 'MacLocal' + map.size,
+        category: inferCategory(face.family),
+        source: 'local',
+        weights: [],
+        variable: false,
+        installedAt: face.installedAt || 0,
+      });
     }
+    const f = map.get(face.family);
+    f.installedAt = Math.max(f.installedAt || 0, face.installedAt || 0);
+    const weight = weightFromStyle(face.style);
+    if (!f.weights.includes(weight)) f.weights.push(weight);
 
-    let style = $('#mac-local-faces');
-    if (!style) document.head.append(style = h('style', { id: 'mac-local-faces' }));
-    style.textContent = rules.join('\n');
+    const italic = /italic|oblique/i.test(face.style);
+    const sources = [`local(${JSON.stringify(face.postscriptName)})`, `local(${JSON.stringify(face.fullName)})`];
+    if (['.ttf', '.otf', '.woff', '.woff2'].includes(face.extension)) sources.push(`url(${JSON.stringify(face.file)})`);
+    rules.push(`@font-face{font-family:${JSON.stringify(f.alias)};src:${sources.join(',')};font-weight:${weight};font-style:${italic ? 'italic' : 'normal'};font-display:swap;}`);
+  }
 
-    state.localFonts = sortFamilies(map);
-    setSource('local');
-    message(`Connected ${state.localFonts.length} installed Mac font families.`);
+  let style = $('#mac-local-faces');
+  if (!style) document.head.append(style = h('style', { id: 'mac-local-faces' }));
+  style.textContent = rules.join('\n');
+  return sortFamilies(map);
+}
+
+/**
+ * Connect (or reconnect) the fonts installed on this computer.
+ *   silent  — automatic reconnect at launch: no toasts unless something useful to say
+ *   fresh   — ignore the Mac app's saved font list and scan again (Rescan)
+ *   trigger — button to show a spinner on
+ */
+async function connectLocalFonts({ silent = false, fresh = false, trigger = null } = {}) {
+  if (state.localStatus === 'loading') return;
+  state.localStatus = 'loading';
+  const restore = trigger ? setBusy(trigger, trigger === el.rescan ? '' : 'Reading fonts…') : null;
+  if (state.source === 'local') render(); // shows the loading state
+  const progress = silent ? null : message(
+    fresh ? 'Rescanning installed fonts…' : 'Reading installed fonts… the first scan can take a minute.',
+    { tone: 'progress', id: 'connect' });
+
+  try {
+    const families = window.queryLocalFonts ? await readBrowserFonts() : await readMacFonts(fresh);
+    const imported = state.localFonts.filter((f) => f.imported); // keep this session's imports
+    state.localFonts = [...families, ...imported];
+    state.localStatus = 'ready';
+    state.fontsConnected = true;
+    persist();
+    syncConnectedUI();
+    progress?.dismiss(true);
+    if (!silent) {
+      message(fresh
+        ? `Rescan complete — ${families.length.toLocaleString()} installed font families.`
+        : `Connected ${families.length.toLocaleString()} installed font families. They’ll load automatically from now on.`, { tone: 'success', id: 'connect' });
+    }
+    if (state.source === 'local' || !silent) setSource('local');
   } catch {
-    message(window.nativeFontCatalog
-      ? 'Could not connect to the Mac font service. Quit and reopen Find My Type, then try again.'
-      : 'Could not connect to the Mac font service. Restart Find My Type with Launch Find My Type.command, then try again.');
+    state.localStatus = 'idle';
+    progress?.dismiss(true);
+    if (!silent) {
+      const hint = window.queryLocalFonts ? 'Font access wasn’t granted. Try again, or import font files instead.'
+        : window.nativeFontCatalog ? 'Couldn’t read your installed fonts. Quit and reopen Find My Type, then try again.'
+        : 'Couldn’t reach the Mac font service. Restart it with “Launch Find My Type.command”, then try again.';
+      message(hint, { tone: 'error' });
+    }
+    if (state.source === 'local') render();
   } finally {
-    el.connect.disabled = false;
+    if (restore && trigger.isConnected) restore();
   }
+}
+
+/** Show the rescan button only once fonts are connected. */
+function syncConnectedUI() {
+  el.rescan.hidden = !(state.fontsConnected && state.localStatus === 'ready');
+}
+
+/* ---- First-launch prompt ---- */
+
+function showConnectPrompt() {
+  const dialog = h('dialog', { className: 'modal', 'aria-labelledby': 'connect-title' });
+  dialog.innerHTML = `
+    <div class="modal-icon" aria-hidden="true">${svg(EMPTY_ICONS.connect)}</div>
+    <h2 id="connect-title" class="modal-title">Use the fonts on this Mac?</h2>
+    <p class="modal-body">Find My Type can preview your company name in every font installed on this computer.
+      Fonts are read locally and never leave your Mac.</p>
+    <p class="modal-note">You’ll only be asked once — after this, your fonts load automatically.</p>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" data-choice="later">Not now</button>
+      <button type="button" class="btn-primary" data-choice="connect">Connect fonts</button>
+    </div>`;
+  document.body.append(dialog);
+
+  const close = (choice) => {
+    state.fontsPrompted = true;
+    persist();
+    dialog.classList.add('leaving');
+    setTimeout(() => dialog.remove(), 180);
+    dialog.close();
+    if (choice === 'connect') {
+      connectLocalFonts();
+    } else {
+      setSource('google');
+      message('No problem — you can connect your fonts any time from the Local Fonts tab.');
+    }
+  };
+  dialog.addEventListener('click', (e) => {
+    const choice = e.target.closest('[data-choice]')?.dataset.choice;
+    if (choice) close(choice);
+  });
+  dialog.addEventListener('cancel', (e) => { e.preventDefault(); close('later'); }); // Esc
+  dialog.showModal();
+  dialog.querySelector('[data-choice="connect"]').focus();
 }
 
 /** Imported files live only for this session (FontFace objects aren't persisted). */
@@ -671,14 +862,14 @@ async function importFontFiles(files) {
       await face.load();
       document.fonts.add(face);
       const family = file.name.replace(/\.(ttf|otf|woff2?)$/i, '');
-      state.localFonts.push({ family, alias, category: inferCategory(family), source: 'local', weights: [400], variable: false });
+      state.localFonts.push({ family, alias, category: inferCategory(family), source: 'local', weights: [400], variable: false, imported: true });
       imported++;
     } catch {
-      message('Could not read ' + file.name);
+      message('Couldn’t read ' + file.name + ' — is it a .ttf, .otf, .woff or .woff2 file?', { tone: 'error' });
     }
   }
   setSource('local');
-  message(`Imported ${imported} fonts for this session. Re-import files after reloading.`);
+  if (imported) message(`Imported ${imported} ${imported === 1 ? 'font' : 'fonts'} for this session. You’ll need to import them again after quitting.`, { tone: 'success' });
 }
 
 /* =========================================================================
@@ -813,34 +1004,47 @@ async function exportShortlist() {
   const list = [...state.googleFonts, ...state.localFonts].filter((f) => state.favorites.has(fontId(f)));
   const missing = [...state.favorites].filter((key) => !list.some((f) => fontId(f) === key));
   if (missing.length) {
-    message(`Reconnect local fonts or re-import your font files before exporting: ${missing.length} favourite families are unavailable.`);
+    message(`${missing.length} of your favourites ${missing.length === 1 ? 'is' : 'are'} local fonts that aren’t loaded. Connect your fonts (or re-import the files), then export again.`, {
+      tone: 'error',
+      action: { label: 'Connect fonts', onClick: () => connectLocalFonts() },
+    });
     return;
   }
-  if (!list.length) { message('Favourite a few fonts to export your shortlist.'); return; }
+  if (!list.length) {
+    message('Your shortlist is empty. Tap the heart on fonts you like, then export.', {
+      action: { label: 'How?', onClick: () => { state.filter = FAVOURITES; render(); } },
+    });
+    return;
+  }
 
-  const button = el.exportButton;
-  button.disabled = true;
-  button.textContent = 'Preparing export…';
+  const restore = setBusy(el.exportButton, 'Exporting…');
+  const progress = message(`Loading ${list.length} ${list.length === 1 ? 'font' : 'fonts'}…`, { tone: 'progress', id: 'export' });
   try {
     const name = previewWord();
     const options = { name, bg: el.paper.value, ink: el.ink.value, size: +el.size.value };
     await prepareFonts(list, name);
 
     const sheets = [];
+    const total = Math.ceil(list.length / PER_SHEET);
     for (let start = 0; start < list.length; start += PER_SHEET) {
+      progress.update(total > 1 ? `Drawing sheet ${sheets.length + 1} of ${total}…` : 'Drawing your sheet…');
       sheets.push(await renderSheet(list.slice(start, start + PER_SHEET), options));
     }
 
     const slug = name.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '') || 'wordmark';
     sheets.forEach((blob, i) => downloadFile(blob, `${slug}-favourites${sheets.length > 1 ? '-' + (i + 1) : ''}.png`));
     downloadFile(new Blob([shortlistDetails(list, options)], { type: 'text/plain;charset=utf-8' }), `${slug}-font-details.txt`);
-    message(`Exported ${sheets.length} PNG ${sheets.length === 1 ? 'sheet' : 'sheets'} and font details TXT. Allow multiple downloads if your browser asks.`);
+    progress.dismiss(true);
+    message(`Exported ${list.length} ${list.length === 1 ? 'font' : 'fonts'}: ${sheets.length} PNG ${sheets.length === 1 ? 'sheet' : 'sheets'} + a details file.${window.nativeDownload ? '' : ' Allow multiple downloads if your browser asks.'}`, { tone: 'success' });
   } catch (error) {
-    message('Export could not finish. Check that your favourite fonts have loaded, then try again.');
+    progress.dismiss(true);
+    message('Export didn’t finish — some fonts may not have loaded. Check your connection and try again.', {
+      tone: 'error',
+      action: { label: 'Retry', onClick: exportShortlist },
+    });
     console.error(error);
   } finally {
-    button.disabled = false;
-    button.innerHTML = ICONS.download + '<span>Export shortlist</span>';
+    restore();
   }
 }
 
@@ -1113,15 +1317,28 @@ el.theme.addEventListener('click', () => {
 document.querySelectorAll('[data-source]').forEach((b) => b.addEventListener('click', () => setSource(b.dataset.source)));
 document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 
-el.connect.addEventListener('click', connectLocalFonts);
+el.rescan.addEventListener('click', () => connectLocalFonts({ fresh: true, trigger: el.rescan }));
 el.import.addEventListener('click', () => el.files.click());
 el.files.addEventListener('change', async (e) => { await importFontFiles(e.target.files); e.target.value = ''; });
 el.exportButton.addEventListener('click', exportShortlist);
 el.clearFavourites.addEventListener('click', () => {
+  const previous = [...state.favorites];
+  if (!previous.length) { message('You don’t have any favourites yet.'); return; }
   state.favorites.clear();
   persist();
   render();
-  message('Favourites cleared.');
+  message(`Cleared ${previous.length} ${previous.length === 1 ? 'favourite' : 'favourites'}.`, {
+    id: 'favourites',
+    action: {
+      label: 'Undo',
+      onClick: () => {
+        previous.forEach((key) => state.favorites.add(key));
+        persist();
+        render();
+        message('Favourites restored.', { tone: 'success', id: 'favourites' });
+      },
+    },
+  });
 });
 
 window.addEventListener('resize', () => { refreshAllCards(); moveTabIndicator(); });
@@ -1142,9 +1359,14 @@ document.fonts.ready.then(moveTabIndicator); // tab widths can change once fonts
 if (Array.isArray(window.FONT_CATALOG)) {
   const rank = (f) => { const i = FEATURED.indexOf(f.family); return i < 0 ? 999 : i; };
   state.googleFonts = [...window.FONT_CATALOG].sort((a, b) => rank(a) - rank(b) || a.family.localeCompare(b.family));
-  render();
-  message('Explore the complete Google Fonts catalog. Fonts load as you scroll.');
+  // Start on Google Fonts unless local fonts are (or will be) connected.
+  if (!state.fontsConnected) state.source = 'google';
+  setSource(state.source);
 } else {
   render();
-  message('Could not load the font catalog. Reload to try again.');
+  message('The Google Fonts list didn’t load. Reload the page to try again.', { tone: 'error', duration: 0 });
 }
+
+// Local fonts: reconnect automatically if the user agreed before; otherwise ask once.
+if (state.fontsConnected) connectLocalFonts({ silent: true });
+else if (!state.fontsPrompted) setTimeout(showConnectPrompt, 400);

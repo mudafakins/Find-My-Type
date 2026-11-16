@@ -67,9 +67,8 @@
           <button data-source="google">Google Fonts</button>
           <button data-source="local" class="active">Local Fonts</button>
         </div>
-        <button id="connect">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0V8Zm6 9v4"/></svg>
-          <span>Click here once to connect local fonts</span>
+        <button id="rescan" class="icon-btn" type="button" title="Rescan installed fonts (after installing new ones)" aria-label="Rescan installed fonts" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4.5h-4.5"/></svg>
         </button>
         <button id="import">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
@@ -112,7 +111,6 @@
 
     <div id="grid" class="grid"></div>
     <div id="sentinel" class="sentinel"></div>
-    <div id="status" class="status" role="status"></div>
   </main>
 
   <script src="fonts.js"></script>
