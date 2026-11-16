@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Find My Type — Wordmark Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="main">
+
+    <!-- Wordmark input + global preview controls -->
+    <section class="workspace" aria-label="Wordmark preview controls">
+      <div class="name-row">
+        <div class="name-field">
+          <label class="label" for="word">TYPE COMPANY NAME</label>
+          <input id="word" class="word-input" value="Forma" placeholder="Type a company name" maxlength="100">
+        </div>
+        <div class="header-right">
+          <button id="export">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5"/></svg>
+            <span>Export shortlist</span>
+          </button>
+          <button id="theme" title="Switch light / dark theme" aria-label="Toggle dark mode">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 15.4A8.5 8.5 0 0 1 8.6 4 8.5 8.5 0 1 0 20 15.4Z"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="style-controls">
+        <div class="size-group">
+          <label class="label" for="size">Preview size <span id="sizevalue">42</span></label>
+          <input id="size" class="size" type="range" min="18" max="80" value="42">
+        </div>
+        <div class="palette-group">
+          <span class="label">Card palette</span>
+          <div class="palette-row">
+            <!-- Replaced at runtime by the in-app colour picker (see app.js) -->
+            <label class="color-wrap"><input id="ink" type="color" value="#252525">Text</label>
+            <label class="color-wrap"><input id="paper" type="color" value="#ffffff">Background</label>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Font source tabs, connect/import, search -->
+    <div class="library-bar">
+      <nav class="sources" aria-label="Font source">
+        <div class="source-tabs">
+          <button data-source="google">Google Fonts</button>
+          <button data-source="local" class="active">Local Fonts</button>
+        </div>
+        <button id="connect">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3v5m8-5v5M6 8h12v3a6 6 0 0 1-12 0V8Zm6 9v4"/></svg>
+          <span>Click here once to connect local fonts</span>
+        </button>
+        <button id="import">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          <span>Import fonts</span>
+        </button>
+        <input id="files" type="file" accept=".ttf,.otf,.woff,.woff2" multiple hidden>
+      </nav>
+      <label class="search-wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <input id="search" class="search" placeholder="Search fonts…" aria-label="Search font names">
+      </label>
+    </div>
+
+    <!-- Category filters -->
+    <div class="toolbar">
+      <div id="filters" class="filters" aria-label="Font category"></div>
+    </div>
+
+    <!-- Result count + sorting -->
+    <div class="meta">
+      <span id="count"></span>
+      <div class="meta-actions">
+        <div id="sort-controls" class="sort-controls" aria-label="Font sorting"></div>
+        <button id="clear-favourites">Clear favourites</button>
+      </div>
+    </div>
+
+    <div id="grid" class="grid"></div>
+    <div id="sentinel" class="sentinel"></div>
+    <div id="status" class="status" role="status"></div>
+  </main>
+
+  <script src="fonts.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

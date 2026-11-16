@@ -3,3 +3,5 @@
 **/swift-cache/
 # Older nested "Typefolio" prototype has its own git repo
 Source Code/can-x20/work/typefolio/
+# Build output
+app/dist/
