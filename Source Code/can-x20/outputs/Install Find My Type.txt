@@ -1,0 +1,17 @@
+FIND MY TYPE FOR MAC
+
+Requires macOS 12 Monterey or newer. Supports Intel and Apple Silicon.
+
+1. Extract Find My Type-Mac.zip.
+2. Drag Find My Type.app into your Applications folder.
+3. Open Find My Type from Applications.
+4. Click “Click here once to connect local fonts”. The first scan can take a minute.
+
+No Python, browser, or server setup is required. Installed fonts stay on your Mac.
+Google Fonts previews require internet. Local font previews work offline.
+
+This app is locally signed, not Apple-notarized. macOS may block the first launch.
+Review the app and use macOS's Open Anyway option in Privacy & Security if you choose to allow it.
+
+Favourites are kept within the app on each Mac. Imported font files last until the app reloads.
+Export shortlist shows save dialogs for PNG sheets and a TXT details file.

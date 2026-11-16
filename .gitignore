@@ -1,0 +1,5 @@
+.DS_Store
+# Swift compiler module cache (regenerated on build)
+**/swift-cache/
+# Older nested "Typefolio" prototype has its own git repo
+Source Code/can-x20/work/typefolio/

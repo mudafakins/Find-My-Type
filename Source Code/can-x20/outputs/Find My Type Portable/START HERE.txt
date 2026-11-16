@@ -1,0 +1,36 @@
+FIND MY TYPE — PORTABLE LOCAL APP
+
+1. Copy this entire folder to the computer and unzip it if necessary.
+2. Python 3.9 or newer must be installed. No extra Python packages are needed.
+3. Launch using the file for your operating system:
+   Mac: double-click Launch Find My Type.command
+   Windows: double-click Launch Find My Type.bat
+   Linux: run sh "Launch Find My Type.sh" in a terminal
+
+The browser opens automatically. Keep the terminal open while using the app.
+Press Control+C in the terminal to stop it.
+If the browser does not open, visit http://127.0.0.1:8765/
+If port 8765 is busy, stop the existing Find My Type launcher or app using that port.
+
+LOCAL FONTS
+Mac Safari: click the connect button. First scan can take about a minute.
+Windows/Linux: use desktop Chrome or Edge, click connect, and grant font access.
+All platforms: Import fonts supports TTF, OTF, WOFF and WOFF2 files.
+Imported fonts last for the current session.
+This folder contains no installed fonts from the original computer: it reads
+fonts on the computer where it runs.
+
+OFFLINE AND SAVED DATA
+Installed/imported previews work offline. Google Fonts previews need internet.
+Company text, favourites and settings stay in the browser on each computer.
+They do not automatically transfer with this folder.
+Export shortlist produces PNG sheets and a TXT font-details file.
+Large shortlists use multiple PNGs; allow multiple downloads if asked.
+
+The server listens only on 127.0.0.1; no hosting account is required.
+Tall/Condensed and local categories use name-based estimates.
+Font licenses still apply; italic styles may be synthesized.
+
+Compatibility: desktop macOS, Windows and Linux with Python 3.9+.
+This package is not an Android/iOS app. Windows/Linux launchers are provided
+but were not run on those operating systems during packaging.
