@@ -102,6 +102,7 @@ const state = {
   settings: saved.settings || {}, // per-font { weight, italic, spacing }
   source: 'local',                 // 'google' | 'local'
   filter: ALL,
+  view: saved.view === 'list' ? 'list' : 'grid', // 'grid' | 'list'
   newestFirst: false,
   randomOrder: null,               // Map<fontId, index> while shuffled
   googleFonts: [],
@@ -120,6 +121,7 @@ function persist() {
       paper: el.paper.value,
       size: el.size.value,
       dark: document.body.classList.contains('dark'),
+      view: state.view,
     }));
   } catch { /* storage full or unavailable — non-fatal */ }
 }
@@ -213,31 +215,58 @@ function trackLocalFontDates() {
    Google Fonts loading
    ========================================================================= */
 
-const loadedGoogleFamilies = new Set();
+const googleStylesheets = new Map(); // family -> Promise that settles when its CSS has loaded
 
-function googleFontLink(f) {
-  if (f.source !== 'google' || loadedGoogleFamilies.has(f.family)) return null;
-  loadedGoogleFamilies.add(f.family);
-  const family = encodeURIComponent(f.family).replace(/%20/g, '+');
-  const link = h('link', {
-    rel: 'stylesheet',
-    href: `https://fonts.googleapis.com/css2?family=${family}:wght@${f.weights.join(';')}&display=swap`,
-  });
-  link.addEventListener('error', () => loadedGoogleFamilies.delete(f.family));
-  document.head.append(link);
-  return link;
+/** Add the Google Fonts stylesheet for a family once; resolves when it has loaded. */
+function loadGoogleStylesheet(f) {
+  if (f.source !== 'google') return Promise.resolve();
+  if (!googleStylesheets.has(f.family)) {
+    const family = encodeURIComponent(f.family).replace(/%20/g, '+');
+    const link = h('link', {
+      rel: 'stylesheet',
+      href: `https://fonts.googleapis.com/css2?family=${family}:wght@${f.weights.join(';')}&display=swap`,
+    });
+    const ready = new Promise((resolve, reject) => {
+      link.addEventListener('load', resolve, { once: true });
+      link.addEventListener('error', () => {
+        googleStylesheets.delete(f.family); // allow a retry later
+        link.remove();
+        reject(new Error('Font stylesheet failed: ' + f.family));
+      }, { once: true });
+    });
+    googleStylesheets.set(f.family, ready);
+    document.head.append(link);
+  }
+  return googleStylesheets.get(f.family);
 }
 
-// Load a card's Google font when it scrolls near the viewport.
+const fontSpec = (f, s, px = 40) => `${s.italic ? 'italic ' : ''}${s.weight} ${px}px ${cssFamily(f)}`;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function withTimeout(promise, ms, message = 'Timed out') {
+  return Promise.race([promise, delay(ms).then(() => { throw new Error(message); })]);
+}
+
+/** Show a placeholder until the card's face is ready, then reveal the sample. */
+async function loadCardFont(card) {
+  const f = card._font;
+  try {
+    await withTimeout(loadGoogleStylesheet(f), 15000);
+    // Font files can be slow; after 8s reveal anyway (browser falls back, then swaps in).
+    await Promise.race([document.fonts.load(fontSpec(f, settingsFor(f)), previewWord()), delay(8000)]);
+  } catch {
+    card.classList.add('failed');
+    card.querySelector('.card-meta').textContent = 'Font unavailable · check connection';
+  }
+  card.classList.remove('loading');
+  updateCard(card);
+}
+
+// Start loading a card's font when it scrolls near the viewport.
 const cardObserver = new IntersectionObserver((entries) => {
   for (const entry of entries) {
     if (!entry.isIntersecting) continue;
-    const card = entry.target;
-    const link = googleFontLink(card._font);
-    link?.addEventListener('error', () => {
-      card.querySelector('.card-foot span').textContent = 'Font unavailable · check connection';
-    });
-    cardObserver.unobserve(card);
+    cardObserver.unobserve(entry.target);
+    loadCardFont(entry.target);
   }
 }, { rootMargin: '350px' });
 
@@ -292,6 +321,22 @@ function setSource(source) {
   document.querySelectorAll('[data-source]').forEach((b) => b.classList.toggle('active', b.dataset.source === source));
   moveTabIndicator();
   render();
+}
+
+/* =========================================================================
+   Grid / list view
+   ========================================================================= */
+
+function setView(view) {
+  state.view = view;
+  el.grid.classList.toggle('list', view === 'list');
+  document.querySelectorAll('[data-view]').forEach((b) => {
+    const on = b.dataset.view === view;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-pressed', on);
+  });
+  refreshAllCards();
+  persist();
 }
 
 /* =========================================================================
@@ -366,20 +411,23 @@ new IntersectionObserver((entries) => {
   if (entries[0].isIntersecting && state.page < state.visible.length) appendPage();
 }, { rootMargin: '400px' }).observe(el.sentinel);
 
+const weightName = (w) => ({ 100: 'Thin', 200: 'Extra Light', 300: 'Light', 400: 'Regular', 500: 'Medium', 600: 'Semibold', 700: 'Bold', 800: 'Extra Bold', 900: 'Black' })[w] || '';
+const formatTracking = (v) => (v > 0 ? '+' : '') + v.toFixed(1);
+const isDefault = (f, s) => { const d = defaultSettings(f); return s.weight === d.weight && s.italic === d.italic && s.spacing === d.spacing; };
+
 function createCard(f) {
   const key = fontId(f);
   const s = settingsFor(f);
-  const card = h('article', { className: 'card' });
+  const card = h('article', { className: 'card loading' });
   card._font = f;
 
-  const save = () => { updateCard(card); persist(); };
-
-  // Header: name + favourite
+  // Header: name, details, favourite
   const heart = h('button', { className: 'heart', innerHTML: ICONS.heart, 'aria-label': 'Favourite ' + f.family });
   const syncHeart = () => {
     const on = state.favorites.has(key);
     heart.classList.toggle('saved', on);
     heart.setAttribute('aria-pressed', on);
+    heart.title = on ? 'Remove from favourites' : 'Add to favourites';
   };
   heart.addEventListener('click', () => {
     if (state.favorites.has(key)) state.favorites.delete(key); else state.favorites.add(key);
@@ -388,22 +436,26 @@ function createCard(f) {
     heart.classList.toggle('pop', state.favorites.has(key)); // animate only on click
   });
   syncHeart();
-  const head = h('div', { className: 'card-head' }, h('strong', { textContent: f.family }), heart);
+
+  const details = [f.category, `${f.weights.length} ${f.weights.length === 1 ? 'weight' : 'weights'}`];
+  if (f.variable) details.push('Variable');
+  const head = h('div', { className: 'card-head' },
+    h('div', { className: 'card-title' },
+      h('strong', { textContent: f.family, title: f.family }),
+      h('span', { className: 'card-meta', textContent: details.join(' · ') }),
+    ),
+    heart,
+  );
 
   // Preview: uppercase + lowercase lines
   const sample = h('div', { className: 'sample' }, h('div'), h('div'));
 
-  // Footer: category + weight count
-  const foot = h('div', { className: 'card-foot' },
-    h('span', { textContent: f.category.toUpperCase() }),
-    h('span', { textContent: `${f.weights.length} ${f.weights.length === 1 ? 'weight' : 'weights'}${f.variable ? ' · Variable' : ''}` }),
-  );
-
   // Per-font options: weight, italic, tracking, reset
   const weight = h('select', {
     'aria-label': f.family + ' weight',
+    disabled: f.weights.length < 2,
     onChange: () => { s.weight = +weight.value; save(); },
-  }, ...f.weights.map((w) => h('option', { value: w, textContent: w + (w === 400 ? ' Regular' : w === 700 ? ' Bold' : '') })));
+  }, ...f.weights.map((w) => h('option', { value: w, textContent: `${w} ${weightName(w)}`.trim() })));
   weight.value = s.weight;
 
   const italic = h('button', {
@@ -412,9 +464,10 @@ function createCard(f) {
     title: 'Italic (may be synthesized)',
     'aria-label': 'Toggle italics for ' + f.family,
     'aria-pressed': s.italic,
-    onClick: () => { s.italic = !s.italic; italic.setAttribute('aria-pressed', s.italic); save(); },
+    onClick: () => { s.italic = !s.italic; save(); },
   });
 
+  const trackingValue = h('output', { className: 'tracking-value' });
   const spacing = h('input', {
     type: 'range', min: -3, max: 12, step: 0.5, value: s.spacing,
     'aria-label': f.family + ' letter spacing',
@@ -429,14 +482,27 @@ function createCard(f) {
       Object.assign(s, defaultSettings(f));
       weight.value = s.weight;
       spacing.value = 0;
-      italic.setAttribute('aria-pressed', false);
       save();
     },
   });
 
-  const options = h('div', { className: 'options' }, weight, italic, h('label', {}, 'Tracking ', spacing), reset);
+  // Keep controls in sync with settings.
+  function syncControls() {
+    italic.setAttribute('aria-pressed', s.italic);
+    trackingValue.textContent = formatTracking(s.spacing);
+    reset.disabled = isDefault(f, s);
+  }
+  function save() { syncControls(); updateCard(card); persist(); }
+  syncControls();
 
-  card.append(head, sample, foot, options);
+  const options = h('div', { className: 'options' },
+    h('span', { className: 'select' }, weight),
+    italic,
+    h('label', { className: 'tracking', title: 'Letter spacing (px)' }, h('span', { textContent: 'Tracking' }), spacing, trackingValue),
+    reset,
+  );
+
+  card.append(head, sample, options);
   return card;
 }
 
@@ -449,6 +515,7 @@ function updateCard(card) {
 
   card.style.background = el.paper.value;
   card.style.color = el.ink.value;
+  card.style.setProperty('--card-paper', el.paper.value);
 
   const sample = card.querySelector('.sample');
   Object.assign(sample.style, {
@@ -461,9 +528,11 @@ function updateCard(card) {
   sample.children[0].textContent = word.toUpperCase();
   sample.children[1].textContent = word.toLowerCase();
 
-  // Shrink lines that overflow the card.
+  // Shrink lines that overflow. In list view the two lines sit side by side.
   requestAnimationFrame(() => {
-    const available = sample.clientWidth - 24;
+    const gap = parseFloat(getComputedStyle(sample).columnGap) || 0;
+    const sideBySide = state.view === 'list' && getComputedStyle(sample).flexDirection === 'row';
+    const available = sideBySide ? (sample.clientWidth - gap) / 2 - 24 : sample.clientWidth - 24;
     for (const line of sample.children) {
       line.style.fontSize = size + 'px';
       if (line.scrollWidth > available) line.style.fontSize = Math.max(9, size * available / line.scrollWidth) + 'px';
@@ -591,25 +660,12 @@ function downloadFile(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 30000);
 }
 
-function waitForStylesheet(link) {
-  if (link.sheet) return Promise.resolve();
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('Font stylesheet timeout')), 20000);
-    link.addEventListener('load', () => { clearTimeout(timer); resolve(); }, { once: true });
-    link.addEventListener('error', () => { clearTimeout(timer); reject(new Error('Font stylesheet failed')); }, { once: true });
-  });
-}
-
 /** Make sure every favourite face is loaded before drawing it on canvas. */
 async function prepareFonts(list, word) {
-  for (const f of list) googleFontLink(f); // favourites that were never scrolled into view
-  const links = [...document.querySelectorAll('link[href*="fonts.googleapis.com/css2"]')];
-  await Promise.all(links.map(waitForStylesheet));
+  // Includes favourites that were never scrolled into view.
+  await withTimeout(Promise.all(list.map(loadGoogleStylesheet)), 20000, 'Font stylesheet timeout');
   await document.fonts.ready;
-  for (const f of list) {
-    const s = settingsFor(f);
-    await document.fonts.load(`${s.italic ? 'italic ' : ''}${s.weight} 40px ${cssFamily(f)}`, word);
-  }
+  for (const f of list) await document.fonts.load(fontSpec(f, settingsFor(f)), word);
 }
 
 /** Draw one line of the wordmark centred in a card, shrinking it to fit. */
@@ -913,6 +969,7 @@ el.theme.addEventListener('click', () => {
 });
 
 document.querySelectorAll('[data-source]').forEach((b) => b.addEventListener('click', () => setSource(b.dataset.source)));
+document.querySelectorAll('[data-view]').forEach((b) => b.addEventListener('click', () => setView(b.dataset.view)));
 
 el.connect.addEventListener('click', connectLocalFonts);
 el.import.addEventListener('click', () => el.files.click());
@@ -933,6 +990,7 @@ document.fonts.addEventListener('loadingdone', refreshAllCards);
    ========================================================================= */
 
 renderToolbar();
+setView(state.view);
 moveTabIndicator();
 // Enable the slide animation only after the first placement (no slide-in on load).
 requestAnimationFrame(() => requestAnimationFrame(() => tabIndicator?.classList.add('ready')));
