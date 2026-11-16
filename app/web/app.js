@@ -18,15 +18,27 @@ const HISTORY_KEY = 'find-my-type-font-history';
 const PAGE_SIZE = 24;
 const DEFAULT_WORD = 'Forma';
 const ALL = 'All fonts';
-const FAVOURITES = 'Favourites ♡';
+const FAVOURITES = 'Favourites';
 const CATEGORIES = [ALL, FAVOURITES, 'Serif', 'Sans serif', 'Display', 'Handwriting', 'Monospace', 'Condensed', 'Tall', 'Bold', 'Variable'];
 
 // Google fonts shown first, in this order. Everything else follows alphabetically.
 const FEATURED = ['DM Sans', 'Playfair Display', 'Space Grotesk', 'Bodoni Moda', 'Cormorant Garamond', 'Montserrat', 'Bebas Neue', 'Manrope', 'Libre Baskerville', 'Oswald', 'Italiana', 'Lora'];
 
+// One icon set: 24×24 grid, 1.75 stroke, round caps — matches the icons in index.html.
+const svg = (paths) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+// Default card colours for each theme (applied when the theme changes).
+const CARD_COLOURS = {
+  light: { ink: '#1b1a18', paper: '#ffffff' },
+  dark: { ink: '#f2f0ed', paper: '#232120' },
+};
+
 const ICONS = {
-  shuffle: '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h3c5 0 7 12 12 12h3M18 15l3 3-3 3M3 18h3c2 0 4-2 5-4M14 9c1-2 3-3 4-3h3M18 3l3 3-3 3"/></svg>',
-  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5"/></svg>',
+  shuffle: svg('<path d="M3 6h3c5 0 7 12 12 12h3M18 15l3 3-3 3M3 18h3c2 0 4-2 5-4M14 9c1-2 3-3 4-3h3M18 3l3 3-3 3"/>'),
+  download: svg('<path d="M12 3v12m-4-4 4 4 4-4M5 15v5h14v-5"/>'),
+  heart: svg('<path d="M12 20s-7.5-4.6-9.2-9.1C1.7 7.8 3.6 4.5 7 4.5c2 0 3.6 1.1 5 3 1.4-1.9 3-3 5-3 3.4 0 5.3 3.3 4.2 6.4C19.5 15.4 12 20 12 20Z"/>'),
+  reset: svg('<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 3.5v4.5H8"/>'),
+  italic: svg('<path d="M10 4h9M5 20h9M15 4 9 20"/>'),
+  clock: svg('<circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/>'),
 };
 
 /* =========================================================================
@@ -113,7 +125,15 @@ function persist() {
 }
 
 for (const key of ['word', 'ink', 'paper', 'size']) if (saved[key]) el[key].value = saved[key];
-if (saved.dark) document.body.classList.add('dark');
+
+// Theme: use the saved choice, otherwise follow the system on first launch.
+const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+if (saved.dark ?? systemDark) document.body.classList.add('dark');
+if (saved.dark === undefined) {
+  const colours = CARD_COLOURS[systemDark ? 'dark' : 'light'];
+  if (!saved.ink) el.ink.value = colours.ink;
+  if (!saved.paper) el.paper.value = colours.paper;
+}
 el.sizeValue.textContent = el.size.value;
 
 /* =========================================================================
@@ -227,7 +247,8 @@ const cardObserver = new IntersectionObserver((entries) => {
 
 function renderToolbar() {
   el.filters.replaceChildren(...CATEGORIES.map((category) => h('button', {
-    textContent: category,
+    innerHTML: category === FAVOURITES ? ICONS.heart + '<span>Favourites</span>' : '',
+    textContent: category === FAVOURITES ? undefined : category,
     className: category === state.filter ? 'active' : '',
     onClick: () => { state.filter = category; renderToolbar(); render(); },
   })));
@@ -239,7 +260,7 @@ function renderToolbar() {
     onClick: shuffle,
   });
   const newest = h('button', {
-    textContent: 'Newly installed',
+    innerHTML: ICONS.clock + '<span>Newly installed</span>',
     className: state.newestFirst ? 'active' : '',
     title: 'Newest local fonts first; file creation dates are estimates. Fonts without dates use first detection after the initial scan.',
     onClick: toggleNewest,
@@ -334,10 +355,9 @@ function createCard(f) {
   const save = () => { updateCard(card); persist(); };
 
   // Header: name + favourite
-  const heart = h('button', { className: 'heart', 'aria-label': 'Favourite ' + f.family });
+  const heart = h('button', { className: 'heart', innerHTML: ICONS.heart, 'aria-label': 'Favourite ' + f.family });
   const syncHeart = () => {
     const on = state.favorites.has(key);
-    heart.textContent = on ? '♥' : '♡';
     heart.classList.toggle('saved', on);
     heart.setAttribute('aria-pressed', on);
   };
@@ -345,6 +365,7 @@ function createCard(f) {
     if (state.favorites.has(key)) state.favorites.delete(key); else state.favorites.add(key);
     persist();
     if (state.filter === FAVOURITES) render(); else syncHeart();
+    heart.classList.toggle('pop', state.favorites.has(key)); // animate only on click
   });
   syncHeart();
   const head = h('div', { className: 'card-head' }, h('strong', { textContent: f.family }), heart);
@@ -367,7 +388,7 @@ function createCard(f) {
 
   const italic = h('button', {
     className: 'italic',
-    textContent: 'I',
+    innerHTML: ICONS.italic,
     title: 'Italic (may be synthesized)',
     'aria-label': 'Toggle italics for ' + f.family,
     'aria-pressed': s.italic,
@@ -381,7 +402,8 @@ function createCard(f) {
   });
 
   const reset = h('button', {
-    textContent: '↺',
+    innerHTML: ICONS.reset,
+    title: 'Reset weight, italic and tracking',
     'aria-label': 'Reset ' + f.family,
     onClick: () => {
       Object.assign(s, defaultSettings(f));
@@ -607,7 +629,7 @@ async function renderSheet(group, { name, bg, ink, size }) {
   const canvas = h('canvas', { width: width * scale, height: height * scale });
   const ctx = canvas.getContext('2d');
   ctx.scale(scale, scale);
-  ctx.fillStyle = isDark() ? '#181818' : '#f3f3f3';
+  ctx.fillStyle = isDark() ? '#141312' : '#f5f4f1';
   ctx.fillRect(0, 0, width, height);
 
   group.forEach((f, i) => {
@@ -862,8 +884,9 @@ el.search.addEventListener('input', render);
 
 el.theme.addEventListener('click', () => {
   const dark = document.body.classList.toggle('dark');
-  el.ink.value = dark ? '#e8e8e8' : '#262626';
-  el.paper.value = dark ? '#292929' : '#ffffff';
+  const colours = CARD_COLOURS[dark ? 'dark' : 'light'];
+  el.ink.value = colours.ink;
+  el.paper.value = colours.paper;
   el.ink.dispatchEvent(new Event('input'));   // updates swatch, cards, storage
   el.paper.dispatchEvent(new Event('input'));
   colourPicker.refresh();
