@@ -45,6 +45,13 @@
             <!-- Replaced at runtime by the in-app colour picker (see app.js) -->
             <label class="color-wrap"><input id="ink" type="color" value="#1a1a1a">Text</label>
             <label class="color-wrap"><input id="paper" type="color" value="#ffffff">Background</label>
+            <button id="swap-colours" class="icon-btn" type="button" title="Swap text and background" aria-label="Swap text and background colours">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 4 4 7l3 3M4 7h16M17 20l3-3-3-3M20 17H4"/></svg>
+            </button>
+            <button id="palette-presets" class="presets-trigger" type="button" aria-haspopup="dialog" aria-expanded="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="3.5"/><circle cx="16" cy="8" r="3.5"/><circle cx="8" cy="16" r="3.5"/><circle cx="16" cy="16" r="3.5"/></svg>
+              <span>Presets</span>
+            </button>
           </div>
         </div>
       </div>
@@ -72,7 +79,11 @@
       </nav>
       <label class="search-wrap">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
-        <input id="search" class="search" placeholder="Search fonts…" aria-label="Search font names">
+        <input id="search" class="search" type="text" placeholder="Search fonts…" aria-label="Search font names" autocomplete="off" spellcheck="false">
+        <kbd class="search-hint" aria-hidden="true">⌘K</kbd>
+        <button id="clear-search" class="search-clear" type="button" title="Clear search (Esc)" aria-label="Clear search">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+        </button>
       </label>
     </div>
 

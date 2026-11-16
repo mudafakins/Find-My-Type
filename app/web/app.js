@@ -83,6 +83,7 @@ const el = {
   import: $('#import'),
   files: $('#files'),
   clearFavourites: $('#clear-favourites'),
+  clearSearch: $('#clear-search'),
 };
 
 const message = (text) => { el.status.textContent = text; };
@@ -103,8 +104,8 @@ const state = {
   source: 'local',                 // 'google' | 'local'
   filter: ALL,
   view: saved.view === 'list' ? 'list' : 'grid', // 'grid' | 'list'
-  newestFirst: false,
-  randomOrder: null,               // Map<fontId, index> while shuffled
+  sort: 'suggested',               // 'suggested' | 'shuffle' | 'newest'
+  randomOrder: null,               // Map<fontId, rank> while shuffled
   googleFonts: [],
   localFonts: [],
   visible: [],
@@ -158,9 +159,10 @@ function settingsFor(f) {
   return state.settings[key];
 }
 
-/** Filter tags. Condensed/Tall are guesses from the family name. */
+/** Filter tags (cached per font). Condensed/Tall are guesses from the family name. */
 function tags(f) {
-  const result = [f.category];
+  if (f._tags) return f._tags;
+  const result = f._tags = [f.category];
   if (/condensed|narrow|compressed/i.test(f.family)) result.push('Condensed');
   if (/tall|bebas|oswald|anton|condensed/i.test(f.family)) result.push('Tall');
   if (f.weights.some((w) => w >= 700)) result.push('Bold');
@@ -274,46 +276,80 @@ const cardObserver = new IntersectionObserver((entries) => {
    Toolbar: category filters + sorting
    ========================================================================= */
 
-function renderToolbar() {
-  el.filters.replaceChildren(...CATEGORIES.map((category) => h('button', {
-    innerHTML: category === FAVOURITES ? ICONS.heart + '<span>Favourites</span>' : '',
-    textContent: category === FAVOURITES ? undefined : category,
-    className: category === state.filter ? 'active' : '',
-    onClick: () => { state.filter = category; renderToolbar(); render(); },
-  })));
+const SORTS = [
+  { id: 'suggested', label: 'Suggested', title: 'Popular picks first, then A–Z (local fonts: A–Z)' },
+  { id: 'shuffle', label: 'Shuffle', icon: 'shuffle', title: 'Random order — click again to reshuffle' },
+  { id: 'newest', label: 'Newest', icon: 'clock', title: 'Newest installed local fonts first. Dates are estimates; fonts without dates use first detection after the initial scan.' },
+];
 
-  const random = h('button', {
-    innerHTML: ICONS.shuffle + '<span>Random</span>',
-    title: 'Shuffle fonts matching the current filter and search',
-    className: 'random-sort' + (state.randomOrder ? ' active' : ''),
-    onClick: shuffle,
-  });
-  const newest = h('button', {
-    innerHTML: ICONS.clock + '<span>Newly installed</span>',
-    className: state.newestFirst ? 'active' : '',
-    title: 'Newest local fonts first; file creation dates are estimates. Fonts without dates use first detection after the initial scan.',
-    onClick: toggleNewest,
-  });
-  el.sortControls.replaceChildren(random, newest);
-}
+const filterButtons = new Map(); // category -> { button, count }
 
-function shuffle() {
-  state.newestFirst = false;
-  const order = currentList().map(fontId);
-  for (let i = order.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [order[i], order[j]] = [order[j], order[i]];
+/** Build the category chips and sort control once; render() keeps them in sync. */
+function buildToolbar() {
+  for (const category of CATEGORIES) {
+    const count = h('span', { className: 'count' });
+    const label = category === FAVOURITES ? h('span', { innerHTML: ICONS.heart + '<span>Favourites</span>', className: 'chip-label' }) : h('span', { textContent: category });
+    const button = h('button', {
+      'aria-pressed': false,
+      onClick: () => { state.filter = category; render(); },
+    }, label, count);
+    filterButtons.set(category, { button, count });
+    el.filters.append(button);
   }
-  state.randomOrder = new Map(order.map((key, i) => [key, i]));
-  renderToolbar();
-  render();
+
+  el.sortControls.append(...SORTS.map((sort) => h('button', {
+    innerHTML: (sort.icon ? ICONS[sort.icon] : '') + `<span>${sort.label}</span>`,
+    title: sort.title,
+    'data-sort': sort.id,
+    onClick: () => setSort(sort.id),
+  })));
 }
 
-function toggleNewest() {
-  state.newestFirst = !state.newestFirst;
+/** Update chip counts (for the current source + search) and active states. */
+function syncToolbar(query) {
+  const counts = new Map(CATEGORIES.map((c) => [c, 0]));
+  for (const f of currentList()) {
+    if (!f.family.toLowerCase().includes(query)) continue;
+    counts.set(ALL, counts.get(ALL) + 1);
+    if (state.favorites.has(fontId(f))) counts.set(FAVOURITES, counts.get(FAVOURITES) + 1);
+    for (const tag of tags(f)) if (counts.has(tag)) counts.set(tag, counts.get(tag) + 1);
+  }
+  for (const [category, { button, count }] of filterButtons) {
+    const active = category === state.filter;
+    const n = counts.get(category);
+    button.classList.toggle('active', active);
+    button.classList.toggle('empty-chip', n === 0 && !active);
+    button.setAttribute('aria-pressed', active);
+    count.textContent = n.toLocaleString();
+  }
+  for (const button of el.sortControls.children) {
+    const on = button.dataset.sort === state.sort;
+    button.classList.toggle('active', on);
+    button.setAttribute('aria-pressed', on);
+  }
+}
+
+function shuffleOrder() {
+  // Rank every font in both sources, so switching source keeps a shuffled order.
+  const ids = [...state.googleFonts, ...state.localFonts].map(fontId);
+  for (let i = ids.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+  }
+  state.randomOrder = new Map(ids.map((key, i) => [key, i]));
+}
+
+function setSort(sort) {
+  state.sort = sort;
   state.randomOrder = null;
-  renderToolbar();
-  setSource('local'); // newest only makes sense for installed fonts
+  if (sort === 'shuffle') shuffleOrder(); // clicking Shuffle again reshuffles
+  if (sort === 'newest' && state.source !== 'local') {
+    setSource('local'); // newest only makes sense for installed fonts
+    message('Showing your newest installed fonts first.');
+    return;
+  }
+  render();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 function setSource(source) {
@@ -371,12 +407,14 @@ function matchesFilters(f, query) {
 
 function render() {
   trackLocalFontDates();
-  const query = el.search.value.toLowerCase();
+  const query = el.search.value.trim().toLowerCase();
+  syncToolbar(query);
+  syncSearch();
   state.visible = currentList().filter((f) => matchesFilters(f, query));
 
-  if (state.newestFirst) {
+  if (state.sort === 'newest') {
     state.visible.sort((a, b) => (b.installedAt || 0) - (a.installedAt || 0) || a.family.localeCompare(b.family));
-  } else if (state.randomOrder) {
+  } else if (state.sort === 'shuffle' && state.randomOrder) {
     const rank = (f) => state.randomOrder.get(fontId(f)) ?? Number.MAX_SAFE_INTEGER;
     state.visible.sort((a, b) => rank(a) - rank(b));
   }
@@ -807,6 +845,31 @@ async function exportShortlist() {
 }
 
 /* =========================================================================
+   Popover helpers
+   ========================================================================= */
+
+/** Place a fixed popover under its anchor (or above it if there's no room). */
+function placePopover(panel, anchor, maxWidth) {
+  const rect = anchor.getBoundingClientRect();
+  const width = Math.min(maxWidth, window.innerWidth - 24);
+  panel.style.width = width + 'px';
+  panel.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)) + 'px';
+  panel.style.top = '0px';
+  const height = panel.offsetHeight;
+  const below = rect.bottom + 8 + height < window.innerHeight;
+  panel.style.top = Math.max(12, below ? rect.bottom + 8 : rect.top - height - 8) + 'px';
+}
+
+/** Set both card colours at once (updates swatches, cards and storage). */
+function setCardColours(ink, paper) {
+  el.ink.value = ink;
+  el.paper.value = paper;
+  el.ink.dispatchEvent(new Event('input'));
+  el.paper.dispatchEvent(new Event('input'));
+  colourPicker.refresh();
+}
+
+/* =========================================================================
    Colour picker (app-owned so native WebKit popovers can't detach from the swatch)
    ========================================================================= */
 
@@ -859,17 +922,7 @@ const colourPicker = (() => {
 
   function apply(hex) { setValue(hex); readHex(hex); sync(); }
 
-  function position() {
-    if (!anchor) return;
-    const rect = anchor.getBoundingClientRect();
-    const width = Math.min(260, window.innerWidth - 24);
-    panel.style.width = width + 'px';
-    panel.style.left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)) + 'px';
-    panel.style.top = '0px';
-    const height = panel.offsetHeight;
-    const below = rect.bottom + 8 + height < window.innerHeight;
-    panel.style.top = Math.max(12, below ? rect.bottom + 8 : rect.top - height - 8) + 'px';
-  }
+  const position = () => anchor && placePopover(panel, anchor, 260);
 
   function close() {
     panel.hidden = true;
@@ -945,6 +998,72 @@ const colourPicker = (() => {
 })();
 
 /* =========================================================================
+   Card palette presets
+   ========================================================================= */
+
+const PALETTES = [
+  { name: 'Ink', ink: '#1a1a1a', paper: '#ffffff' },
+  { name: 'Reverse', ink: '#ffffff', paper: '#1a1a1a' },
+  { name: 'Graphite', ink: '#e6e6e6', paper: '#3a3a3a' },
+  { name: 'Stone', ink: '#2a2a2a', paper: '#d9d9d9' },
+  { name: 'Newsprint', ink: '#2b2b2b', paper: '#efebe3' },
+  { name: 'Midnight', ink: '#f5e9c8', paper: '#1f2547' },
+  { name: 'Forest', ink: '#eef3e8', paper: '#1f3b2d' },
+  { name: 'Clay', ink: '#4a2a1d', paper: '#f1ddd0' },
+  { name: 'Blueprint', ink: '#ffffff', paper: '#1d4ed8' },
+  { name: 'Signal', ink: '#111111', paper: '#ffd400' },
+];
+
+(() => {
+  const trigger = $('#palette-presets');
+  const panel = h('div', { className: 'colour-popover palette-popover', hidden: true, role: 'dialog', 'aria-label': 'Card palette presets' },
+    h('div', { className: 'picker-title', textContent: 'Card palettes' }));
+  const grid = h('div', { className: 'palette-grid' });
+  panel.append(grid);
+  document.body.append(panel);
+
+  const buttons = PALETTES.map((p) => {
+    const swatch = h('span', { className: 'palette-swatch', textContent: 'Aa' });
+    swatch.style.background = p.paper;
+    swatch.style.color = p.ink;
+    const button = h('button', {
+      type: 'button', className: 'palette-option', title: `${p.name}: ${p.ink} on ${p.paper}`,
+      onClick: () => { setCardColours(p.ink, p.paper); sync(); },
+    }, swatch, h('span', { textContent: p.name }));
+    button._palette = p;
+    grid.append(button);
+    return button;
+  });
+
+  function sync() {
+    for (const b of buttons) {
+      b.setAttribute('aria-pressed', b._palette.ink === el.ink.value.toLowerCase() && b._palette.paper === el.paper.value.toLowerCase());
+    }
+  }
+  const position = () => !panel.hidden && placePopover(panel, trigger, 340);
+  function close() { panel.hidden = true; trigger.setAttribute('aria-expanded', 'false'); }
+
+  trigger.addEventListener('click', () => {
+    if (!panel.hidden) { close(); return; }
+    sync();
+    panel.hidden = false;
+    trigger.setAttribute('aria-expanded', 'true');
+    position();
+    buttons[0].focus({ preventScroll: true });
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (!panel.hidden && !panel.contains(e.target) && !trigger.contains(e.target)) close();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !panel.hidden) { close(); trigger.focus(); }
+  });
+  window.addEventListener('resize', position);
+  window.addEventListener('scroll', position, true);
+})();
+
+$('#swap-colours').addEventListener('click', () => setCardColours(el.paper.value, el.ink.value));
+
+/* =========================================================================
    Wiring
    ========================================================================= */
 
@@ -956,16 +1075,39 @@ for (const key of ['word', 'ink', 'paper', 'size']) {
   });
 }
 
+/* ---- Search ---- */
+function syncSearch() {
+  $('.search-wrap').classList.toggle('has-value', el.search.value.length > 0);
+}
+
+function clearSearch() {
+  el.search.value = '';
+  render();
+}
+
 el.search.addEventListener('input', render);
+el.search.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    if (el.search.value) clearSearch(); else el.search.blur();
+    e.stopPropagation();
+  }
+});
+el.clearSearch.addEventListener('click', (e) => { e.preventDefault(); clearSearch(); el.search.focus(); });
+
+// ⌘K / Ctrl+K anywhere, or "/" when not typing, focuses search.
+document.addEventListener('keydown', (e) => {
+  const typing = e.target.closest?.('input, textarea, select, [contenteditable]');
+  if (((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') || (e.key === '/' && !typing)) {
+    e.preventDefault();
+    el.search.focus();
+    el.search.select();
+  }
+});
 
 el.theme.addEventListener('click', () => {
   const dark = document.body.classList.toggle('dark');
   const colours = CARD_COLOURS[dark ? 'dark' : 'light'];
-  el.ink.value = colours.ink;
-  el.paper.value = colours.paper;
-  el.ink.dispatchEvent(new Event('input'));   // updates swatch, cards, storage
-  el.paper.dispatchEvent(new Event('input'));
-  colourPicker.refresh();
+  setCardColours(colours.ink, colours.paper);
 });
 
 document.querySelectorAll('[data-source]').forEach((b) => b.addEventListener('click', () => setSource(b.dataset.source)));
@@ -989,7 +1131,8 @@ document.fonts.addEventListener('loadingdone', refreshAllCards);
    Boot
    ========================================================================= */
 
-renderToolbar();
+if (!/Mac|iPhone|iPad/.test(navigator.platform)) $('.search-hint').textContent = 'Ctrl K';
+buildToolbar();
 setView(state.view);
 moveTabIndicator();
 // Enable the slide animation only after the first placement (no slide-in on load).
