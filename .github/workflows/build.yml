@@ -17,7 +17,10 @@ permissions:
 jobs:
   mac:
     name: macOS app
-    runs-on: macos-latest
+    # Intel Mac machines: GitHub's Apple Silicon pool is often too busy to pick up the job.
+    # build.sh still produces a universal app (Apple Silicon + Intel).
+    runs-on: macos-15-intel
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
