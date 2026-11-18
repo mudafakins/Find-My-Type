@@ -1744,12 +1744,17 @@ if (IS_WINDOWS) {
     ['Export shortlist as PNG…', 'Ctrl+Shift+E', () => exportShortlist('png')],
     null,
     ['Check for updates…', '', () => window.nativeCommand?.('check-updates')],
+    ['Install updates automatically', '', () => window.nativeCommand?.(autoUpdate ? 'auto-update-off' : 'auto-update-on'), 'auto-update'],
+    null,
     ['About Find My Type', '', () => window.nativeCommand?.('about')],
   ];
+  let autoUpdate = true;
   const panel = h('div', { className: 'colour-popover app-menu', hidden: true, role: 'menu' },
     ...items.map((item) => (item
-      ? h('button', { type: 'button', role: 'menuitem', className: 'menu-item', onClick: () => { close(); item[2](); } },
-        h('span', { textContent: item[0] }), h('kbd', { textContent: item[1] }))
+      ? h('button', {
+        type: 'button', role: item[3] ? 'menuitemcheckbox' : 'menuitem', className: 'menu-item', 'data-item': item[3] || null,
+        onClick: () => { close(); item[2](); },
+      }, h('span', { textContent: item[0] }), h('kbd', { textContent: item[1] }))
       : h('hr', { className: 'menu-sep' }))));
   document.body.append(panel);
   function close() { panel.hidden = true; trigger.setAttribute('aria-expanded', 'false'); }
@@ -1763,6 +1768,18 @@ if (IS_WINDOWS) {
   document.addEventListener('pointerdown', (e) => { if (!panel.hidden && !panel.contains(e.target) && !trigger.contains(e.target)) close(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !panel.hidden) { close(); trigger.focus(); } });
   window.addEventListener('resize', close);
+
+  // The setting lives in the Windows app; it tells us its value.
+  let settingsLoaded = false;
+  window.onAppSettings = (settings) => {
+    if (settingsLoaded && autoUpdate !== !!settings.autoUpdate) window.onUpdateStatus({ state: 'auto-setting', on: !!settings.autoUpdate });
+    settingsLoaded = true;
+    autoUpdate = !!settings.autoUpdate;
+    const toggle = panel.querySelector('[data-item="auto-update"]');
+    toggle.setAttribute('aria-checked', autoUpdate);
+    toggle.querySelector('kbd').textContent = autoUpdate ? '✓' : '';
+  };
+  window.nativeCommand?.('get-settings');
 }
 
 /* ---- Updates (both platforms): the native side checks GitHub Releases and reports here ---- */
@@ -1784,6 +1801,15 @@ window.onUpdateStatus = (update) => {
       break;
     case 'checking': message('Checking for updates…', { tone: 'progress', id: 'update' }); break;
     case 'uptodate': message(`You’re up to date (version ${update.current}).`, { tone: 'success', id: 'update' }); break;
+    case 'ready':
+      message(`Find My Type ${update.version} is installed. ${IS_WINDOWS ? 'It finishes installing when you close the app.' : 'It opens next time you start the app.'}`, {
+        tone: 'success', id: 'update', duration: 0,
+        action: { label: 'Restart now', onClick: () => window.nativeCommand?.('relaunch') },
+      });
+      break;
+    case 'auto-setting':
+      message(update.on ? 'Updates will install automatically.' : 'Automatic updates are off. You’ll be asked before updating.', { id: 'update' });
+      break;
     case 'unconfigured': message('Updates aren’t set up for this build yet.', { id: 'update' }); break;
     case 'error': message(update.message || 'Couldn’t check for updates. Try again later.', { tone: 'error', id: 'update' }); break;
     default: break;

@@ -16,7 +16,9 @@ Get the latest version from the [Releases](../../releases/latest) page:
   **More info → Run anyway**.
 
 Both apps check for updates once a day and from **Check for Updates…**
-(Mac: app menu · Windows: the ⋯ menu).
+(Mac: app menu · Windows: the ⋯ menu). With **Install Updates Automatically** on (the default),
+new versions download and install in the background and are used the next time the app opens —
+or straight away with **Restart now**. Turn it off to be asked before each update.
 
 ## Project layout
 

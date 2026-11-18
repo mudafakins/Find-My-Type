@@ -46,6 +46,8 @@ internal sealed class MainForm : Form
               if (p) m.error ? p.reject(new Error(m.error)) : p.resolve(m.faces);
             } else if (m.type === 'update') {
               window.onUpdateStatus && window.onUpdateStatus(m);
+            } else if (m.type === 'settings') {
+              window.onAppSettings && window.onAppSettings(m);
             } else if (m.type === 'command') {
               window.appCommand && window.appCommand(m.name);
             }
@@ -74,7 +76,11 @@ internal sealed class MainForm : Form
 
         updater = new Updater(status => Post("update", status), () => BeginInvoke(new Action(Close)));
         Load += async (_, _) => await InitializeWebViewAsync();
-        FormClosing += (_, _) => SaveWindowBounds();
+        FormClosing += (_, _) =>
+        {
+            SaveWindowBounds();
+            updater.ApplyStagedUpdate(relaunch: false); // a downloaded update is installed as the app closes
+        };
     }
 
     private async Task InitializeWebViewAsync()
@@ -173,7 +179,15 @@ internal sealed class MainForm : Form
                 switch (message.GetProperty("name").GetString())
                 {
                     case "check-updates": _ = updater.CheckAsync(userInitiated: true); break;
-                    case "install-update": _ = updater.InstallAsync(); break;
+                    case "install-update": _ = updater.InstallAsync(restartNow: true); break;
+                    case "relaunch": updater.ApplyStagedUpdate(relaunch: true); break;
+                    case "get-settings": PostSettings(); break;
+                    case "auto-update-on":
+                    case "auto-update-off":
+                        updater.AutoInstall = message.GetProperty("name").GetString() == "auto-update-on";
+                        PostSettings();
+                        if (updater.AutoInstall) _ = updater.InstallWaitingUpdateAsync();
+                        break;
                     case "about": ShowAbout(); break;
                 }
                 break;
@@ -192,6 +206,8 @@ internal sealed class MainForm : Form
             web.CoreWebView2.PostWebMessageAsJson($"{{\"type\":\"fonts\",\"id\":{id},\"error\":\"Could not read fonts\"}}");
         }
     }
+
+    private void PostSettings() => Post("settings", new() { ["autoUpdate"] = updater.AutoInstall });
 
     /// <summary>Send { type, ...payload } to the page (from any thread).</summary>
     private void Post(string type, Dictionary<string, object?> payload)

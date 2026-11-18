@@ -6,8 +6,12 @@ using System.Text.Json;
 namespace FindMyType;
 
 /// <summary>
-/// Checks the GitHub repository baked in at build time (UpdateRepo) for a newer release,
-/// downloads Find-My-Type-Windows.zip, and swaps the new files in after the app exits.
+/// Updates from the GitHub repository baked in at build time (UpdateRepo).
+///
+/// Windows can't replace a running program, so updates are "staged": the new files are
+/// downloaded and unpacked into %LOCALAPPDATA%\FindMyType\pending-update, then copied over
+/// the app folder by a small script once the app has closed — either when the user quits
+/// (automatic updates) or right away with a relaunch ("Update now" / "Restart now").
 /// Progress is reported to the page as { state, ... } (same shape as the Mac app).
 /// </summary>
 internal sealed class Updater
@@ -19,12 +23,53 @@ internal sealed class Updater
     private readonly Action quit;
     private (string Version, string Url)? latest;
     private bool busy;
+    private bool applying;
 
     public Updater(Action<Dictionary<string, object?>> report, Action quit)
     {
         this.report = report;
         this.quit = quit;
+        DiscardStaleStage();
     }
+
+    // ---------------------------------------------------------------- settings & paths
+
+    private static string DataDir
+    {
+        get
+        {
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FindMyType");
+            Directory.CreateDirectory(dir);
+            return dir;
+        }
+    }
+
+    private static string StageDir => Path.Combine(DataDir, "pending-update");
+    private static string StagedFiles => Path.Combine(StageDir, "files");
+    private static string StagedVersionFile => Path.Combine(StageDir, "version.txt");
+    private static string LastCheckFile => Path.Combine(DataDir, "last-update-check.txt");
+    private static string SettingsFile => Path.Combine(DataDir, "settings.json");
+
+    private sealed record Settings(bool InstallUpdatesAutomatically = true);
+
+    /// <summary>"Install updates automatically" (on by default).</summary>
+    public bool AutoInstall
+    {
+        get
+        {
+            try { return JsonSerializer.Deserialize<Settings>(File.ReadAllText(SettingsFile))?.InstallUpdatesAutomatically ?? true; }
+            catch { return true; }
+        }
+        set
+        {
+            try { File.WriteAllText(SettingsFile, JsonSerializer.Serialize(new Settings(value))); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>Version waiting in the staging folder, if any.</summary>
+    public string? StagedVersion =>
+        File.Exists(StagedVersionFile) && File.Exists(Path.Combine(StagedFiles, "FindMyType.exe"))
+            ? File.ReadAllText(StagedVersionFile).Trim() : null;
 
     public static string CurrentVersion
     {
@@ -39,9 +84,6 @@ internal sealed class Updater
         Assembly.GetExecutingAssembly().GetCustomAttributes<AssemblyMetadataAttribute>()
             .FirstOrDefault(a => a.Key == "UpdateRepo")?.Value is { } repo && repo.Contains('/') ? repo.Trim() : null;
 
-    private static string LastCheckFile =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FindMyType", "last-update-check.txt");
-
     private static HttpClient CreateClient()
     {
         var client = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
@@ -50,10 +92,29 @@ internal sealed class Updater
         return client;
     }
 
+    /// <summary>A staged update that's not newer than this version (e.g. already applied) is removed.</summary>
+    private void DiscardStaleStage()
+    {
+        try
+        {
+            var staged = StagedVersion;
+            if (Directory.Exists(StageDir) && (staged == null || !IsNewer(staged, CurrentVersion)))
+                Directory.Delete(StageDir, recursive: true);
+        }
+        catch { /* best effort */ }
+    }
+
+    // ---------------------------------------------------------------- checking
+
     /// <summary>userInitiated: report "checking"/"up to date"/errors. Automatic checks are quiet and daily.</summary>
     public async Task CheckAsync(bool userInitiated)
     {
         if (busy) return;
+        if (StagedVersion is { } staged)
+        {
+            report(new() { ["state"] = "ready", ["version"] = staged });
+            return;
+        }
         var repo = Repository;
         if (repo == null)
         {
@@ -68,7 +129,6 @@ internal sealed class Updater
         try
         {
             using var doc = JsonDocument.Parse(await Http.GetStringAsync($"https://api.github.com/repos/{repo}/releases/latest"));
-            Directory.CreateDirectory(Path.GetDirectoryName(LastCheckFile)!);
             File.WriteAllText(LastCheckFile, DateTime.UtcNow.ToString("o"));
 
             var root = doc.RootElement;
@@ -80,7 +140,8 @@ internal sealed class Updater
             if (IsNewer(version, CurrentVersion))
             {
                 latest = (version, asset.GetProperty("browser_download_url").GetString()!);
-                report(new() { ["state"] = "available", ["version"] = version, ["current"] = CurrentVersion });
+                if (AutoInstall) await InstallAsync(restartNow: false, quiet: !userInitiated);
+                else report(new() { ["state"] = "available", ["version"] = version, ["current"] = CurrentVersion });
             }
             else if (userInitiated)
             {
@@ -92,6 +153,10 @@ internal sealed class Updater
             if (userInitiated) report(new() { ["state"] = "error", ["message"] = "Couldn’t reach the update server. Check your connection and try again." });
         }
     }
+
+    /// <summary>An update was found earlier (while automatic install was off): stage it quietly now.</summary>
+    public Task InstallWaitingUpdateAsync() =>
+        latest != null && StagedVersion == null ? InstallAsync(restartNow: false, quiet: true) : Task.CompletedTask;
 
     public static bool IsNewer(string a, string b)
     {
@@ -107,22 +172,33 @@ internal sealed class Updater
         return false;
     }
 
-    public async Task InstallAsync()
+    // ---------------------------------------------------------------- installing
+
+    /// <summary>
+    /// Download and stage the latest version.
+    /// restartNow: apply immediately and relaunch ("Update now"). Otherwise it's applied when the app closes.
+    /// quiet: no progress messages (automatic background install) — only "ready" or errors.
+    /// </summary>
+    public async Task InstallAsync(bool restartNow = true, bool quiet = false)
     {
-        if (latest is not { } update || busy) return;
+        if (busy) return;
+        if (StagedVersion != null)
+        {
+            if (restartNow) ApplyStagedUpdate(relaunch: true);
+            return;
+        }
+        if (latest is not { } update) return;
         busy = true;
+        void Say(Dictionary<string, object?> status) { if (!quiet) report(status); }
         try
         {
-            var installDir = AppContext.BaseDirectory.TrimEnd('\\');
-            if (!CanWrite(installDir))
+            if (!CanWrite(AppFolder))
                 throw new UnauthorizedAccessException("Find My Type can’t update itself in this folder. Move it to a folder you own (for example Documents or AppData), then try again.");
 
-            var work = Path.Combine(Path.GetTempPath(), "FindMyTypeUpdate-" + Guid.NewGuid().ToString("N"));
-            var zip = Path.Combine(work, "update.zip");
-            var extracted = Path.Combine(work, "files");
-            Directory.CreateDirectory(work);
+            if (Directory.Exists(StageDir)) Directory.Delete(StageDir, recursive: true);
+            Directory.CreateDirectory(StageDir);
+            var zip = Path.Combine(StageDir, "update.zip");
 
-            // Download with progress
             using (var response = await Http.GetAsync(update.Url, HttpCompletionOption.ResponseHeadersRead))
             {
                 response.EnsureSuccessStatusCode();
@@ -138,40 +214,66 @@ internal sealed class Updater
                     await output.WriteAsync(buffer.AsMemory(0, read));
                     received += read;
                     var percent = total > 0 ? (int)(received * 100 / total) : 0;
-                    if (percent != lastPercent) { lastPercent = percent; report(new() { ["state"] = "downloading", ["progress"] = percent }); }
+                    if (percent != lastPercent) { lastPercent = percent; Say(new() { ["state"] = "downloading", ["progress"] = percent }); }
                 }
             }
 
-            report(new() { ["state"] = "installing" });
-            ZipFile.ExtractToDirectory(zip, extracted);
-            if (!File.Exists(Path.Combine(extracted, "FindMyType.exe")))
+            Say(new() { ["state"] = "installing" });
+            ZipFile.ExtractToDirectory(zip, StagedFiles);
+            File.Delete(zip);
+            if (!File.Exists(Path.Combine(StagedFiles, "FindMyType.exe")))
                 throw new InvalidDataException("The downloaded update isn’t Find My Type. Nothing was changed.");
+            File.WriteAllText(StagedVersionFile, update.Version);
+            busy = false;
 
-            // After this process exits: copy the new files over, relaunch, clean up.
-            var script = Path.Combine(work, "apply-update.ps1");
-            File.WriteAllText(script, """
-                param([int]$ProcessId, [string]$Source, [string]$Target, [string]$Work)
-                Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
-                Start-Sleep -Milliseconds 400
-                Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force
-                Start-Process -FilePath (Join-Path $Target 'FindMyType.exe')
-                Remove-Item -Path $Work -Recurse -Force -ErrorAction SilentlyContinue
-                """);
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "powershell.exe",
-                ArgumentList = { "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script,
-                                 "-ProcessId", Environment.ProcessId.ToString(), "-Source", extracted, "-Target", installDir, "-Work", work },
-                CreateNoWindow = true,
-                UseShellExecute = false,
-            });
-            quit();
+            if (restartNow) ApplyStagedUpdate(relaunch: true);
+            else report(new() { ["state"] = "ready", ["version"] = update.Version });
         }
         catch (Exception error)
         {
             busy = false;
+            try { if (Directory.Exists(StageDir)) Directory.Delete(StageDir, recursive: true); } catch { /* ignore */ }
             var text = error is UnauthorizedAccessException or InvalidDataException ? error.Message : "The update didn’t finish. Try again later.";
             report(new() { ["state"] = "error", ["message"] = text });
+        }
+    }
+
+    private static string AppFolder => AppContext.BaseDirectory.TrimEnd('\\');
+
+    /// <summary>
+    /// Copy the staged files over the app folder once this process exits.
+    /// relaunch: start the updated app afterwards and close this one now.
+    /// Called with relaunch=false when the app is closing normally.
+    /// </summary>
+    public void ApplyStagedUpdate(bool relaunch)
+    {
+        if (applying || StagedVersion == null) return;
+        applying = true;
+        var script = Path.Combine(DataDir, "apply-update.ps1");
+        File.WriteAllText(script, """
+            param([int]$ProcessId, [string]$Source, [string]$Target, [string]$Stage, [string]$Relaunch)
+            Wait-Process -Id $ProcessId -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 400
+            Copy-Item -Path (Join-Path $Source '*') -Destination $Target -Recurse -Force
+            Remove-Item -Path $Stage -Recurse -Force -ErrorAction SilentlyContinue
+            if ($Relaunch -eq 'yes') { Start-Process -FilePath (Join-Path $Target 'FindMyType.exe') }
+            """);
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            ArgumentList =
+            {
+                "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", script,
+                "-ProcessId", Environment.ProcessId.ToString(), "-Source", StagedFiles, "-Target", AppFolder,
+                "-Stage", StageDir, "-Relaunch", relaunch ? "yes" : "no",
+            },
+            CreateNoWindow = true,
+            UseShellExecute = false,
+        });
+        if (relaunch)
+        {
+            report(new() { ["state"] = "installing" });
+            quit();
         }
     }
 

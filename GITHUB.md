@@ -61,7 +61,8 @@ When the Actions run finishes, **Releases** shows *v2.1.0* with
 1. Make and commit your changes.
 2. Run `app/release.sh 2.2.0` (next number up).
 3. Done. Within a day — or straight away via **Check for Updates…** — every installed copy
-   shows *“Find My Type 2.2.0 is available”* with an **Update now** button.
+   updates itself in the background (shows *“Find My Type 2.2.0 is installed — Restart now”*),
+   or, if the user turned automatic updates off, offers an **Update now** button.
 
 Version numbers: bump the last number for fixes (2.1.1), the middle one for new features (2.2.0).
 

@@ -252,6 +252,15 @@ final class Updater {
     private let report: ([String: Any]) -> Void
     private var latest: (version: String, url: URL)?
     private var busy = false
+    private var installedVersion: String? // installed in place, waiting for a restart
+    private static let autoInstallKey = "InstallUpdatesAutomatically"
+
+    /// "Install Updates Automatically" (on by default): download and install quietly;
+    /// the new version is used the next time the app opens (or after "Restart now").
+    var autoInstall: Bool {
+        get { UserDefaults.standard.object(forKey: Self.autoInstallKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.autoInstallKey) }
+    }
     private static let assetName = "Find-My-Type-Mac.zip"
     private static let lastCheckKey = "LastUpdateCheck"
 
@@ -266,6 +275,10 @@ final class Updater {
     /// userInitiated: show "checking" / "up to date" / errors. Automatic checks stay quiet unless there's an update.
     func check(userInitiated: Bool) {
         guard !busy else { return }
+        if let installedVersion {
+            if userInitiated { report(["state": "ready", "version": installedVersion]) }
+            return
+        }
         guard let repo = repository else { if userInitiated { report(["state": "unconfigured"]) }; return }
         if !userInitiated, let last = UserDefaults.standard.object(forKey: Self.lastCheckKey) as? Date, Date().timeIntervalSince(last) < 86_400 { return }
         if userInitiated { report(["state": "checking"]) }
@@ -289,12 +302,21 @@ final class Updater {
                 let version = tag.trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
                 if Self.isNewer(version, than: self.current) {
                     self.latest = (version, url)
-                    self.report(["state": "available", "version": version, "current": self.current])
+                    if self.autoInstall {
+                        self.install(relaunch: false, quiet: !userInitiated)
+                    } else {
+                        self.report(["state": "available", "version": version, "current": self.current])
+                    }
                 } else if userInitiated {
                     self.report(["state": "uptodate", "current": self.current])
                 }
             }
         }.resume()
+    }
+
+    /// An update was found earlier (while automatic install was off): install it quietly now.
+    func installWaitingUpdate() {
+        if latest != nil, installedVersion == nil { install(relaunch: false, quiet: true) }
     }
 
     static func isNewer(_ a: String, than b: String) -> Bool {
@@ -306,10 +328,13 @@ final class Updater {
         return false
     }
 
-    func install() {
+    /// relaunch: restart into the new version straight away ("Update now").
+    /// quiet: no progress messages (automatic background install) — only "ready" or errors.
+    func install(relaunch: Bool = true, quiet: Bool = false) {
         guard let latest, !busy else { return }
         busy = true
-        report(["state": "downloading", "progress": 0])
+        let say = { (status: [String: Any]) in if !quiet { self.report(status) } }
+        say(["state": "downloading", "progress": 0])
         let task = URLSession.shared.downloadTask(with: latest.url) { file, response, error in
             let fail = { (message: String) in DispatchQueue.main.async { self.busy = false; self.report(["state": "error", "message": message]) } }
             guard let file, error == nil, (response as? HTTPURLResponse)?.statusCode == 200 else { return fail("The download didn’t finish. Try again later.") }
@@ -318,7 +343,7 @@ final class Updater {
                 try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
                 let zip = work.appendingPathComponent("update.zip")
                 try FileManager.default.moveItem(at: file, to: zip)
-                DispatchQueue.main.async { self.report(["state": "installing"]) }
+                DispatchQueue.main.async { say(["state": "installing"]) }
                 try Self.run("/usr/bin/ditto", ["-x", "-k", zip.path, work.path])
                 guard let newApp = try FileManager.default.contentsOfDirectory(at: work, includingPropertiesForKeys: nil).first(where: { $0.pathExtension == "app" }),
                       Bundle(url: newApp)?.bundleIdentifier == Bundle.main.bundleIdentifier
@@ -327,12 +352,16 @@ final class Updater {
 
                 let target = Bundle.main.bundleURL
                 _ = try FileManager.default.replaceItemAt(target, withItemAt: newApp)
-                // Relaunch the new copy once this one has quit.
-                let relaunch = Process()
-                relaunch.executableURL = URL(fileURLWithPath: "/bin/sh")
-                relaunch.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", target.path]
-                try relaunch.run()
-                DispatchQueue.main.async { NSApp.terminate(nil) }
+                if relaunch {
+                    try Self.relaunch()
+                } else {
+                    // Installed; this copy keeps running until the user restarts or quits.
+                    DispatchQueue.main.async {
+                        self.busy = false
+                        self.installedVersion = latest.version
+                        self.report(["state": "ready", "version": latest.version])
+                    }
+                }
             } catch {
                 fail("Couldn’t install the update. Move Find My Type into your Applications folder, then try again.")
             }
@@ -343,10 +372,19 @@ final class Updater {
             let percent = Int(progress.fractionCompleted * 100)
             guard percent != lastPercent else { return } // only whole-percent changes
             lastPercent = percent
-            DispatchQueue.main.async { self.report(["state": "downloading", "progress": percent]) }
+            DispatchQueue.main.async { say(["state": "downloading", "progress": percent]) }
             if progress.fractionCompleted >= 1 { observation?.invalidate() }
         }
         task.resume()
+    }
+
+    /// Open the (new) app bundle once this process has quit, then quit.
+    static func relaunch() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "sleep 1; /usr/bin/open \"$0\"", Bundle.main.bundleURL.path]
+        try process.run()
+        DispatchQueue.main.async { NSApp.terminate(nil) }
     }
 
     private static func run(_ tool: String, _ arguments: [String]) throws {
@@ -520,6 +558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
         _ = submenu("Find My Type", [
             item("About Find My Type", #selector(NSApplication.orderFrontStandardAboutPanel(_:))),
             item("Check for Updates…", #selector(checkForUpdates(_:)), target: self),
+            autoUpdateItem,
             sep(),
             item("Hide Find My Type", #selector(NSApplication.hide(_:)), "h"),
             item("Hide Others", #selector(NSApplication.hideOtherApplications(_:)), "h", [.command, .option]),
@@ -581,6 +620,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
 
     @objc private func checkForUpdates(_ sender: Any?) { updater.check(userInitiated: true) }
 
+    /// App menu › Install Updates Automatically (checkmark).
+    private lazy var autoUpdateItem: NSMenuItem = {
+        let item = NSMenuItem(title: "Install Updates Automatically", action: #selector(toggleAutoUpdate(_:)), keyEquivalent: "")
+        item.target = self
+        item.state = updater.autoInstall ? .on : .off
+        return item
+    }()
+
+    @objc private func toggleAutoUpdate(_ sender: NSMenuItem) {
+        updater.autoInstall.toggle()
+        sender.state = updater.autoInstall ? .on : .off
+        reportUpdate(["state": "auto-setting", "on": updater.autoInstall])
+        if updater.autoInstall { updater.installWaitingUpdate() } // an update already offered installs now
+    }
+
     /// Send update progress to the page, which shows it as a toast.
     private func reportUpdate(_ status: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: status), let json = String(data: data, encoding: .utf8) else { return }
@@ -623,6 +677,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, WKSc
             switch message.body as? String {
             case "check-updates": updater.check(userInitiated: true)
             case "install-update": updater.install()
+            case "relaunch": try? Updater.relaunch()
             case "about": NSApp.orderFrontStandardAboutPanel(nil)
             default: break
             }
